@@ -39,3 +39,8 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# agent-runtime: large binaries and local configs
+agent-runtime/coder/*.tar.gz
+agent-runtime/extensions/*.vsix
+agent-runtime/settings.local.json

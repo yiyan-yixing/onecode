@@ -1,0 +1,836 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+IMAGE_REPO="ghcr.io/yiyan-yixing/agent-runtime"
+IMAGE="${AGENT_RUNTIME_IMAGE:-${IMAGE_REPO}:latest}"
+PLATFORM="${AGENT_RUNTIME_PLATFORM:-linux/amd64}"
+IMAGE_TAG=""
+OC_VERSION="0.2.5"
+
+# ── Config ────────────────────────────────────────────────────────
+OC_HOME="${OC_HOME:-$HOME/.onecode}"
+OC_CONFIG="$OC_HOME/settings.json"
+
+_env_api_key="${API_KEY:-}"
+_env_base_url="${API_BASE_URL:-}"
+_env_model="${MODEL:-}"
+
+load_config() {
+    [ -f "$OC_CONFIG" ] || return 0
+    while IFS=':' read -r key value; do
+        value="${value# \"}"
+        value="${value%\"*}"
+        value="${value%,}"
+        case "$key" in
+            *'"API_KEY"')      API_KEY="$value" ;;
+            *'"API_BASE_URL"') API_BASE_URL="$value" ;;
+            *'"MODEL"')        MODEL="$value" ;;
+        esac
+    done < "$OC_CONFIG"
+}
+
+save_config() {
+    mkdir -p "$OC_HOME"
+    cat > "$OC_CONFIG" <<EOF
+{
+  "API_KEY": "$API_KEY",
+  "API_BASE_URL": "$API_BASE_URL",
+  "MODEL": "$MODEL"
+}
+EOF
+    chmod 600 "$OC_CONFIG"
+}
+
+load_config
+[ -n "$_env_api_key" ]  && API_KEY="$_env_api_key"      || true
+[ -n "$_env_base_url" ] && API_BASE_URL="$_env_base_url" || true
+[ -n "$_env_model" ]    && MODEL="$_env_model"           || true
+API_BASE_URL="${API_BASE_URL:-https://api.anthropic.com}"
+MODEL="${MODEL:-GLM-5.1}"
+
+resolve_api_key() {
+    if [ -z "${API_KEY:-}" ]; then
+        read -rsp "Enter API_KEY: " API_KEY
+        echo
+        if [ -z "$API_KEY" ]; then
+            echo "Error: API_KEY is required" >&2
+            exit 1
+        fi
+        save_config
+        echo "API_KEY saved to ~/.onecode/settings.json"
+    fi
+    export API_KEY
+}
+
+# ── Docker common args ────────────────────────────────────────────
+CONTAINER_NAME=""
+WORKDIR=""
+
+build_docker_args() {
+    local name="${CONTAINER_NAME:-oc-$(basename "$(pwd)")-$$_$(date +%s)}"
+    local dir="${WORKDIR:-$(pwd)}"
+    local oc_name="${CONTAINER_NAME:-$(basename "$(pwd)")}"
+    args=(
+        --platform "$PLATFORM"
+        --name "$name"
+        -v "${dir}":/workspace
+        -w /workspace
+        -e "API_BASE_URL=$API_BASE_URL"
+        -e "API_KEY=$API_KEY"
+        -e "MODEL=$MODEL"
+        -e "OC_NAME=$oc_name"
+    )
+    # .ssh mounted read-only by default (for git)
+    local ssh_dir="${SSH_DIR:-$HOME/.ssh}"
+    [ -d "$ssh_dir" ] && args+=(-v "$ssh_dir":/home/work/.ssh:ro)
+
+    if git config --global user.name &>/dev/null; then
+        args+=(-e "GIT_AUTHOR_NAME=$(git config --global user.name)")
+        args+=(-e "GIT_COMMITTER_NAME=$(git config --global user.name)")
+    fi
+    if git config --global user.email &>/dev/null; then
+        args+=(-e "GIT_AUTHOR_EMAIL=$(git config --global user.email)")
+        args+=(-e "GIT_COMMITTER_EMAIL=$(git config --global user.email)")
+    fi
+}
+
+# ── Help ──────────────────────────────────────────────────────────
+show_help() {
+    local cmd="${1:-}"
+    if [ -n "$cmd" ]; then
+        show_command_help "$cmd"
+        return
+    fi
+    cat <<EOF
+oc — OneCode CLI (shorthand for OneCode)
+
+Usage: oc [options] <command> [command-args]
+
+Commands:
+  run       Start interactive Claude CLI in a container (default)
+  remote    Start Web terminal for browser access
+  ssh       Enable SSH and add public key to a running container
+  shell     Enter container shell (new or attach existing)
+  stop      Stop and remove a container
+  update    Pull latest image and optionally restart containers
+  ls        List oc containers and image
+  config    Show saved configuration
+  help      Show help (this message, or help for a specific command)
+
+Global Options:
+  -n NAME       Container name (default: oc-<dir>-<pid>-<ts>)
+  -d DIR        Local directory to mount (default: current directory)
+  -p PORT       Web terminal port (remote mode, default: 7681)
+  -a PORT       App service port (AI-generated services, default: 8000)
+  -s PORT       SSH port (ssh command, default: 8222)
+  --tag TAG     Image tag (default: latest)
+  --https       Enable HTTPS on gateway (self-signed cert, for direct non-localhost access)
+  --debug       Show full docker commands and container logs for troubleshooting
+  -v, --version Show version
+  -h            Show help
+
+Quick Start:
+  oc                                    # interactive CLI (latest image)
+  oc --tag 0.2 remote                   # web terminal with specific version
+  oc remote                             # web terminal at http://localhost:7681
+  oc --https remote                     # HTTPS with self-signed cert
+  oc ssh <name>                         # enable SSH on running container
+
+Run 'oc help <command>' for details on a specific command.
+EOF
+    exit 0
+}
+
+show_command_help() {
+    local cmd="$1"
+    case "$cmd" in
+        run)
+            cat <<EOF
+oc run — Start interactive Claude CLI
+
+Usage: oc run [claude-args]
+
+Starts a container with Claude Code CLI in interactive mode.
+Your current directory is mounted at /workspace inside the container.
+Any additional arguments are passed directly to the 'claude' command.
+
+Options (global):
+  -n NAME     Container name
+  -d DIR      Local directory to mount (default: current directory)
+
+Examples:
+  oc                                  # start Claude in current directory
+  oc -d /path/to/project             # mount a specific project
+  oc -n my-agent                     # named container
+  oc run "Explain this code"         # pass prompt to claude
+  oc run --dangerously-skip-permissions  # pass claude flags
+
+The container is removed automatically when you exit ( --rm ).
+EOF
+            ;;
+        remote)
+            cat <<EOF
+oc remote — Start Web terminal for browser access
+
+Usage: oc remote [options]
+
+Starts a container in detached mode with a web-based terminal (ttyd).
+Open the printed URL in your browser to interact with Claude Code.
+SSH is NOT enabled by default — use 'oc ssh <name>' separately.
+
+Options (global):
+  -n NAME     Container name
+  -d DIR      Local directory to mount
+  -p PORT     Web terminal port on host (default: 7681)
+  -a PORT     App service port on host (AI-generated services, default: 8000)
+  --https     Enable HTTPS on gateway (self-signed cert, for non-localhost access)
+
+Environment:
+  TTYD_TOKEN    If set, requires this token for web terminal access
+  GATEWAY_HTTPS Set to 1 to enable HTTPS on the gateway
+
+Examples:
+  oc remote                           # web terminal at http://localhost:7681
+  oc --https remote                   # HTTPS mode (self-signed cert)
+  oc -p 8080 remote                   # custom port
+  oc -n my-agent -d /src/project remote
+
+After starting, you can:
+  oc ssh <name>                       # enable SSH access
+  oc shell <name>                     # enter the container
+  oc stop <name>                      # stop the container
+EOF
+            ;;
+        ssh)
+            cat <<EOF
+oc ssh — Enable SSH and add public key to a running container
+
+Usage: oc ssh <name> [public-key] [-s PORT]
+
+Adds your SSH public key to a running container's authorized_keys,
+then sets up port forwarding so you can connect from the host.
+Requires 'socat' on the host for automatic port forwarding.
+
+Arguments:
+  <name>        Running container name or ID
+  [public-key]  SSH public key string (optional, auto-detected if omitted)
+
+Options:
+  -s PORT       Host-side SSH port (default: 8222)
+
+Key Auto-Detection (when no public-key is given):
+  Reads the first found file from:
+    ~/.ssh/id_ed25519.pub
+    ~/.ssh/id_rsa.pub
+    ~/.ssh/id_ecdsa.pub
+
+Port Forwarding:
+  Uses socat to forward host:SSH_PORT -> container_ip:8222
+  Install socat: apt install socat (or yum install socat)
+
+Examples:
+  oc ssh my-agent                     # auto-detect key, default port
+  oc ssh my-agent -s 2222             # custom host port
+  oc ssh my-agent "ssh-rsa AAA..."    # specific public key
+
+VS Code ~/.ssh/config after enabling:
+  Host oc
+      HostName <server-ip>
+      Port 8222
+      User node
+      IdentityFile ~/.ssh/id_rsa
+
+Notes:
+  - SSH uses public key authentication only (no passwords)
+  - The container must already be running (use 'oc remote' first)
+  - .ssh directory is mounted read-only from host for git;
+    'oc ssh' adds keys via docker exec into the container
+EOF
+            ;;
+        shell)
+            cat <<EOF
+oc shell — Enter container shell
+
+Usage: oc shell [name]
+
+If a container name/ID is given, opens an interactive bash shell
+inside the running container. Otherwise starts a new container
+with a bash shell.
+
+Arguments:
+  [name]  Running container name or ID (omit to start a new shell container)
+
+Options (when starting new container):
+  -n NAME     Container name
+  -d DIR      Local directory to mount
+
+Examples:
+  oc shell                            # new container with bash shell
+  oc shell my-agent                   # attach to running container
+  oc -d /path/to/project shell        # new shell with specific mount
+EOF
+            ;;
+        stop)
+            cat <<EOF
+oc stop — Stop and remove a container
+
+Usage: oc stop <name>
+
+Stops the container and removes it. Also kills any socat
+port forwarding process associated with this container's SSH port.
+
+Arguments:
+  <name>  Container name or ID
+
+Examples:
+  oc stop my-agent
+
+Note: Containers started with 'oc remote' use --rm, so stopping
+them also removes the container automatically.
+EOF
+            ;;
+        update)
+            cat <<EOF
+oc update — Pull image and optionally restart containers
+
+Usage: oc update [options]
+
+Pulls the agent-runtime image from the registry.
+Also updates the oc CLI itself by running cloud-install.sh from the remote.
+If running containers are detected, offers to restart them
+with the new image (preserving the same name, mounts, and env).
+
+Options:
+  --tag TAG     Pull a specific version instead of default (e.g. 0.2)
+  --restart     Restart all running oc containers after pulling
+  --yes         Skip confirmation prompts
+
+Examples:
+  oc update                           # pull latest image
+  oc update --tag 0.2                 # pull specific version
+  oc update --restart                 # pull and restart running containers
+  oc update --restart --yes           # pull and restart without prompt
+EOF
+            ;;
+        ls)
+            cat <<EOF
+oc ls — List oc containers and image
+
+Usage: oc ls
+
+Shows all containers using the agent-runtime image and the
+available image versions.
+
+Output:
+  Containers section — name, status, port mappings
+  Image section      — repository:tag, size, created time
+
+Examples:
+  oc ls
+EOF
+            ;;
+        config)
+            cat <<EOF
+oc config — Show saved configuration
+
+Usage: oc config
+
+Displays the configuration stored in ~/.onecode/settings.json.
+The API_KEY is masked for security.
+
+Configuration file: ~/.onecode/settings.json (permissions: 600)
+Contains: API_KEY, API_BASE_URL, MODEL
+
+Priority: Environment variables > Config file > Defaults
+
+Examples:
+  oc config                           # show current config
+  API_KEY=sk-xxx oc config            # env vars override config
+EOF
+            ;;
+        help)
+            cat <<EOF
+oc help — Show help
+
+Usage: oc help [command]
+
+Show general help, or detailed help for a specific command.
+
+Examples:
+  oc help                             # general help
+  oc help remote                      # help for 'remote' command
+  oc help ssh                         # help for 'ssh' command
+EOF
+            ;;
+        *)
+            echo "Unknown command: $cmd" >&2
+            echo "Run 'oc help' to see available commands." >&2
+            exit 1
+            ;;
+    esac
+    exit 0
+}
+
+# ── Parse global options ──────────────────────────────────────────
+COMMAND=""
+PORT=""
+APP_PORT=""
+SSH_PORT="8222"
+GATEWAY_HTTPS=""
+OC_DEBUG=""
+
+while [ $# -gt 0 ]; do
+    case "$1" in
+        -n)          CONTAINER_NAME="$2"; shift 2 ;;
+        -d)          WORKDIR="$2"; shift 2 ;;
+        -p)          PORT="$2"; shift 2 ;;
+        -a)          APP_PORT="$2"; shift 2 ;;
+        -s)          SSH_PORT="$2"; shift 2 ;;
+        --tag)       IMAGE_TAG="$2"; shift 2 ;;
+        --https)    GATEWAY_HTTPS="1"; shift ;;
+        --debug)    OC_DEBUG="1"; shift ;;
+        -h|--help)   show_help ;;
+        -v|--version) echo "oc ${OC_VERSION}"; exit 0 ;;
+        run|remote|ssh|shell|stop|update|ls|config|help)
+                     COMMAND="$1"; shift; break ;;
+        *)           COMMAND="run"; break ;;
+    esac
+done
+
+# Default command
+COMMAND="${COMMAND:-run}"
+
+# Parse subcommand-specific options
+while [ $# -gt 0 ]; do
+    case "$1" in
+        -n)        CONTAINER_NAME="$2"; shift 2 ;;
+        -d)        WORKDIR="$2"; shift 2 ;;
+        -p)        PORT="$2"; shift 2 ;;
+        -a)        APP_PORT="$2"; shift 2 ;;
+        -s)        SSH_PORT="$2"; shift 2 ;;
+        --tag)     IMAGE_TAG="$2"; shift 2 ;;
+        --https)    GATEWAY_HTTPS="1"; shift ;;
+        --debug)    OC_DEBUG="1"; shift ;;
+        -v|--version) echo "oc ${OC_VERSION}"; exit 0 ;;
+        *)  break ;;
+    esac
+done
+
+# Apply image tag override
+[ -n "$IMAGE_TAG" ] && IMAGE="${IMAGE_REPO}:${IMAGE_TAG}"
+
+# ── Debug helper ───────────────────────────────────────────────────
+debug_log() {
+    [ "${OC_DEBUG:-}" = "1" ] || return 0
+    echo "[debug] $*" >&2
+}
+
+debug_cmd() {
+    [ "${OC_DEBUG:-}" = "1" ] || return 0
+    echo "[debug] command: $*" >&2
+}
+
+# ── Subcommands ───────────────────────────────────────────────────
+
+cmd_run() {
+    resolve_api_key
+    build_docker_args
+    args+=(--rm -it "$IMAGE" claude)
+    debug_cmd docker run "${args[@]}" "$@"
+    exec docker run "${args[@]}" "$@"
+}
+
+cmd_remote() {
+    resolve_api_key
+    build_docker_args
+    local p="${PORT:-7681}"
+    local ap="${APP_PORT:-8000}"
+    args+=(
+        -d
+        -p "${p}:7681"
+        -p "${ap}:8000"
+        -e "TTYD_PORT=7681"
+        -e "APP_PORT=8000"
+    )
+    [ -n "${TTYD_TOKEN:-}" ] && args+=(-e "TTYD_TOKEN=$TTYD_TOKEN")
+    [ -n "${GATEWAY_HTTPS:-}" ] && args+=(-e "GATEWAY_HTTPS=$GATEWAY_HTTPS")
+    # Label the SSH port so cmd_stop can find the right socat process
+    args+=(--label "oc.ssh_port=${SSH_PORT}")
+    args+=("$IMAGE" remote)
+    debug_cmd docker run "${args[@]}"
+    # Capture the actual container name from docker run output
+    local container_id
+    container_id=$(docker run "${args[@]}" 2>&1) || { echo "Error: failed to start container" >&2; echo "$container_id" >&2; exit 1; }
+    # Validate: on success docker run outputs a 64-char hex container ID
+    if [[ ! "$container_id" =~ ^[0-9a-f]{64}$ ]]; then
+        echo "Error: failed to start container" >&2
+        echo "$container_id" >&2
+        exit 1
+    fi
+    # Resolve to the actual container name to avoid timestamp drift
+    debug_log "container_id: ${container_id}"
+    local actual_name
+    actual_name=$(docker inspect "$container_id" --format '{{.Name}}' 2>/dev/null | sed 's/^\///') || actual_name="${CONTAINER_NAME:-oc-$(basename "$(pwd)")}"
+    # Wait briefly and verify the container is actually running (not crashed after start)
+    sleep 2
+    local container_state
+    container_state=$(docker inspect "$container_id" --format '{{.State.Status}}' 2>/dev/null || echo "gone")
+    if [ "$container_state" != "running" ]; then
+        echo "Error: container exited immediately (status: ${container_state})" >&2
+        local exit_code
+        exit_code=$(docker inspect "$container_id" --format '{{.State.ExitCode}}' 2>/dev/null || echo "?")
+        echo "Exit code: ${exit_code}" >&2
+        echo "" >&2
+        echo "Container logs:" >&2
+        docker logs "$container_id" 2>&1 | tail -20 >&2
+        exit 1
+    fi
+    # Debug: show container logs after successful start
+    if [ "${OC_DEBUG:-}" = "1" ]; then
+        debug_log "container state: ${container_state}"
+        echo "[debug] container logs (last 20 lines):" >&2
+        docker logs "$container_id" 2>&1 | tail -20 >&2
+    fi
+    local proto="http"
+    [ "${GATEWAY_HTTPS:-0}" = "1" ] && proto="https"
+    echo "OneCode running:"
+    echo "  Web:  ${proto}://localhost:${p}"
+    echo "  App:  ${proto}://localhost:${ap}  (AI-generated services)"
+    echo "  Container: ${actual_name}"
+    echo ""
+    echo "  oc ssh ${actual_name}              # enable SSH"
+    echo "  oc shell ${actual_name}"
+    echo "  oc stop ${actual_name}"
+}
+
+cmd_ssh() {
+    if [ -z "${1:-}" ]; then
+        echo "Usage: oc ssh <name> [public-key] [-s PORT]" >&2
+        echo "" >&2
+        echo "  oc ssh my-agent                           # auto-detect key from ~/.ssh/*.pub" >&2
+        echo "  oc ssh my-agent -s 2222                   # use custom port" >&2
+        echo "  oc ssh my-agent \"ssh-rsa AAA...\"           # use specific key" >&2
+        exit 1
+    fi
+    local name="$1"
+    shift
+
+    # Parse ssh-specific options
+    local ssh_key=""
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            -s) SSH_PORT="$2"; shift 2 ;;
+            *)  ssh_key="$1"; shift ;;
+        esac
+    done
+
+    # Auto-detect key if not provided
+    if [ -z "$ssh_key" ] && [ -d "$HOME/.ssh" ]; then
+        local pub_file=""
+        for f in "$HOME/.ssh/id_ed25519.pub" "$HOME/.ssh/id_rsa.pub" "$HOME/.ssh/id_ecdsa.pub"; do
+            if [ -f "$f" ]; then
+                pub_file="$f"
+                break
+            fi
+        done
+        if [ -n "$pub_file" ]; then
+            ssh_key=$(cat "$pub_file")
+            echo "Using key from ${pub_file}"
+        fi
+    fi
+
+    if [ -z "$ssh_key" ]; then
+        echo "Error: no public key found. Provide one explicitly:" >&2
+        echo "  oc ssh ${name} \"ssh-rsa AAA...\"" >&2
+        exit 1
+    fi
+
+    # Add key to container's authorized_keys (writable path, .ssh is read-only mount)
+    # Use stdin to avoid shell injection from SSH key content
+    debug_cmd docker exec -i "$name" bash -c '...'
+    docker exec -i "$name" bash -c '
+        mkdir -p /home/work/.ssh-keys
+        read -r key
+        grep -qF "$key" /home/work/.ssh-keys/authorized_keys 2>/dev/null || echo "$key" >> /home/work/.ssh-keys/authorized_keys
+        chown -R node:node /home/work/.ssh-keys
+        chmod 700 /home/work/.ssh-keys
+        chmod 600 /home/work/.ssh-keys/authorized_keys
+    ' <<< "$ssh_key"
+
+    # Set up port forwarding: host:SSH_PORT -> container:8222
+    # Use docker port mapping via iptables/socat since container is already running
+    local container_ip
+    debug_cmd docker inspect "$name" --format '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}'
+    container_ip=$(docker inspect "$name" --format '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' 2>/dev/null || true)
+
+    # Use socat to forward port if available, otherwise print manual instructions
+    if command -v socat &>/dev/null; then
+        # Kill any existing socat on this port
+        pkill -f "socat TCP-LISTEN:${SSH_PORT}" 2>/dev/null || true
+        nohup socat TCP-LISTEN:${SSH_PORT},fork,reuseaddr TCP:${container_ip}:8222 >/dev/null 2>&1 &
+        local server_ip
+        server_ip=$(hostname -I 2>/dev/null | awk '{print $1}' || echo "<server-ip>")
+        echo "SSH enabled:"
+        echo "  ssh -p ${SSH_PORT} node@${server_ip}"
+        echo ""
+        echo "VS Code ~/.ssh/config:"
+        echo "  Host oc"
+        echo "      HostName ${server_ip}"
+        echo "      Port ${SSH_PORT}"
+        echo "      User node"
+        echo "      IdentityFile ~/.ssh/id_rsa"
+    else
+        echo "SSH enabled (key added). Container IP: ${container_ip}:8222"
+        echo ""
+        echo "Install socat for automatic port forwarding:"
+        echo "  apt install socat   # or yum install socat"
+        echo ""
+        echo "Then re-run: oc ssh ${name}"
+        echo ""
+        echo "Or connect directly from this server:"
+        echo "  ssh -p 8222 node@${container_ip}"
+    fi
+}
+
+cmd_shell() {
+    # If a name/id is given, attach to existing container
+    if [ -n "${1:-}" ]; then
+        debug_cmd docker exec -it "$1" /bin/bash
+        exec docker exec -it "$1" /bin/bash
+    fi
+    # Otherwise start a new shell container
+    resolve_api_key
+    build_docker_args
+    args+=(--rm -it "$IMAGE" /bin/bash)
+    debug_cmd docker run "${args[@]}"
+    exec docker run "${args[@]}"
+}
+
+cmd_stop() {
+    if [ -z "${1:-}" ]; then
+        echo "Usage: oc stop <name>" >&2
+        exit 1
+    fi
+    # Kill socat forwarding — read the actual SSH port from the container label
+    # (handles custom ports set via -s during 'oc remote')
+    local stop_ssh_port
+    debug_cmd docker inspect "$1" --format '{{index .Config.Labels "oc.ssh_port"}}'
+    stop_ssh_port=$(docker inspect "$1" --format '{{index .Config.Labels "oc.ssh_port"}}' 2>/dev/null) || true
+    stop_ssh_port="${stop_ssh_port:-${SSH_PORT}}"
+    pkill -f "socat TCP-LISTEN:${stop_ssh_port}" 2>/dev/null || true
+    debug_cmd docker stop "$1"
+    debug_cmd docker rm "$1"
+    docker stop "$1" 2>/dev/null && docker rm "$1" 2>/dev/null
+    echo "Container $1 removed"
+}
+
+cmd_ls() {
+    echo "=== Containers ==="
+    docker ps -a --format "{{.ID}}\t{{.Names}}\t{{.Status}}\t{{.Ports}}" 2>/dev/null | while IFS=$'\t' read -r id name status ports; do
+        img=$(docker inspect "$id" --format '{{.Config.Image}}' 2>/dev/null || true)
+        if echo "$img" | grep -q "agent-runtime"; then
+            mount_src=$(docker inspect "$id" --format '{{range .Mounts}}{{if eq .Destination "/workspace"}}{{.Source}}{{end}}{{end}}' 2>/dev/null || true)
+            printf "%s\t%s\t%s\t%s\n" "$name" "$status" "$ports" "$mount_src"
+        fi
+    done | column -t -s $'\t' 2>/dev/null || true
+    echo ""
+    echo "=== Image ==="
+    docker images "ghcr.io/yiyan-yixing/agent-runtime" --format "table {{.Repository}}:{{.Tag}}\t{{.Size}}\t{{.CreatedAt}}" 2>/dev/null || true
+}
+
+cmd_config() {
+    if [ -f "$OC_CONFIG" ]; then
+        echo "Config: $OC_CONFIG"
+        sed 's/\("API_KEY": *"\)[^"]*/\1****/' "$OC_CONFIG"
+    else
+        echo "No config file ($OC_CONFIG)"
+    fi
+}
+
+cmd_update() {
+    local do_restart=false
+    local auto_yes=false
+    local update_tag=""
+
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --restart) do_restart=true; shift ;;
+            --yes)     auto_yes=true; shift ;;
+            --tag)     update_tag="$2"; shift 2 ;;
+            *)         shift ;;
+        esac
+    done
+
+    # Determine target version
+    local remote_version_url="https://raw.githubusercontent.com/yiyan-yixing/onecode/main/agent-runtime/VERSION"
+    local target_version="$update_tag"
+
+    if [ -z "$target_version" ]; then
+        echo "Checking latest version from ${remote_version_url} ..."
+        target_version=$(curl -fsSL "$remote_version_url" 2>/dev/null | tr -d '[:space:]') || true
+        if [ -z "$target_version" ]; then
+            echo "Warning: could not fetch remote version, falling back to current image"
+            target_version="latest"
+        else
+            echo "Latest version: ${target_version}"
+        fi
+    fi
+
+    local pull_image="${IMAGE_REPO}:${target_version}"
+
+    # Pull image
+    echo "Pulling $pull_image ..."
+    debug_cmd docker pull --platform "$PLATFORM" "$pull_image"
+    docker pull --platform "$PLATFORM" "$pull_image"
+
+    # Self-update oc CLI via cloud-install.sh
+    local install_url="https://raw.githubusercontent.com/yiyan-yixing/onecode/main/agent-runtime/bin/cloud-install.sh"
+    echo "Updating oc CLI from ${install_url} ..."
+    local install_script
+    install_script=$(curl -fsSL "$install_url" 2>/dev/null) || true
+    if [ -n "$install_script" ]; then
+        # Verify script integrity with SHA256 if checksum file is available
+        local checksum_url="https://raw.githubusercontent.com/yiyan-yixing/onecode/main/agent-runtime/bin/cloud-install.sh.sha256"
+        local checksum
+        checksum=$(curl -fsSL "$checksum_url" 2>/dev/null || true)
+        if [ -n "$checksum" ]; then
+            local actual
+            actual=$(echo "$install_script" | sha256sum | awk '{print $1}')
+            if [ "$actual" != "$checksum" ]; then
+                echo "Error: checksum mismatch for cloud-install.sh (expected $checksum, got $actual)" >&2
+                echo "CLI not updated for safety." >&2
+            else
+                echo "$install_script" | bash -s -- --skip-docker --tag "$target_version"
+            fi
+        else
+            # No checksum available — HTTPS-only provides transport security
+            echo "$install_script" | bash -s -- --skip-docker --tag "$target_version"
+        fi
+    else
+        echo "Warning: could not fetch cloud-install.sh, CLI not updated"
+    fi
+
+    # Show what changed
+    echo ""
+    echo "Image updated to ${pull_image}."
+
+    # Find running oc containers
+    local containers
+    containers=$(docker ps --filter "ancestor=$IMAGE" --format "{{.ID}}\t{{.Names}}\t{{.Status}}" 2>/dev/null || true)
+
+    if [ -z "$containers" ]; then
+        echo "No running containers to restart."
+        return 0
+    fi
+
+    echo ""
+    echo "Running containers using this image:"
+    echo "$containers" | column -t -s $'\t' 2>/dev/null
+    echo ""
+
+    if [ "$do_restart" = false ]; then
+        echo "Run 'oc update --restart' to restart them with the new image."
+        return 0
+    fi
+
+    # Confirm restart
+    if [ "$auto_yes" = false ]; then
+        read -rp "Restart these containers with the new image? [y/N] " answer
+        case "$answer" in
+            y|Y) ;;
+            *)   echo "Aborted."; return 0 ;;
+        esac
+    fi
+
+    # Restart each container, preserving its config
+    while IFS=$'\t' read -r id name status; do
+        echo "Restarting $name ..."
+
+        # Capture original run config BEFORE stopping/removing
+        local image binds env_raw ports restart_policy workdir tty_setting entrypoint cmd_args
+        image=$(docker inspect "$id" --format '{{.Config.Image}}' 2>/dev/null)
+        binds=$(docker inspect "$id" --format '{{range .HostConfig.Binds}}{{.}}{{"\n"}}{{end}}' 2>/dev/null)
+        # Capture raw env (one per line) to preserve values with spaces
+        env_raw=$(docker inspect "$id" --format '{{range .Config.Env}}{{.}}{{"\n"}}{{end}}' 2>/dev/null)
+        ports=$(docker inspect "$id" --format '{{range $p, $conf := .HostConfig.PortBindings}}-p {{(index $conf 0).HostPort}}:{{$p}}{{"\n"}}{{end}}' 2>/dev/null)
+        restart_policy=$(docker inspect "$id" --format '{{.HostConfig.RestartPolicy.Name}}' 2>/dev/null)
+        workdir=$(docker inspect "$id" --format '{{.Config.WorkingDir}}' 2>/dev/null)
+        tty_setting=$(docker inspect "$id" --format '{{.Config.Tty}}' 2>/dev/null || echo "false")
+        # Capture original CMD and Entrypoint to preserve run mode (e.g. "remote")
+        cmd_args=$(docker inspect "$id" --format '{{range .Config.Cmd}}{{.}}{{"\n"}}{{end}}' 2>/dev/null)
+        entrypoint=$(docker inspect "$id" --format '{{range .Config.Entrypoint}}{{.}}{{"\n"}}{{end}}' 2>/dev/null)
+
+        # Stop and remove old container
+        docker stop "$id" >/dev/null 2>&1
+        docker rm "$id" >/dev/null 2>&1
+
+        # Re-run with same config but new image
+        local run_args=(--name "$name" --platform "$PLATFORM")
+        [ -n "$binds" ] && while IFS= read -r b; do [ -n "$b" ] && run_args+=(-v "$b"); done <<< "$binds"
+        # Pass env vars line-by-line to avoid word-splitting on values with spaces
+        if [ -n "$env_raw" ]; then
+            while IFS= read -r ev; do
+                [ -n "$ev" ] && run_args+=("--env" "$ev")
+            done <<< "$env_raw"
+        fi
+        if [ -n "$ports" ]; then
+            while IFS= read -r p; do [ -n "$p" ] && run_args+=($p); done <<< "$ports"
+        fi
+        [ "$restart_policy" != "" ] && [ "$restart_policy" != "no" ] && run_args+=(--restart "$restart_policy")
+        [ -n "$workdir" ] && run_args+=(-w "$workdir")
+
+        # Determine detached vs interactive based on original container's TTY setting
+        if [ "$tty_setting" = "true" ]; then
+            run_args+=(-it)
+        else
+            run_args+=(-d)
+        fi
+
+        # Preserve original entrypoint if it was overridden
+        # Docker --entrypoint only accepts a single executable, not args.
+        # Split: first element = entrypoint, rest = prepend to CMD.
+        local shift_ep_args=()
+        if [ -n "$entrypoint" ]; then
+            local ep_parts=()
+            while IFS= read -r ep; do [ -n "$ep" ] && ep_parts+=("$ep"); done <<< "$entrypoint"
+            if [ ${#ep_parts[@]} -gt 0 ]; then
+                run_args+=(--entrypoint "${ep_parts[0]}")
+                if [ ${#ep_parts[@]} -gt 1 ]; then
+                    shift_ep_args=("${ep_parts[@]:1}")
+                fi
+            fi
+        fi
+
+        run_args+=("$pull_image")
+
+        # Prepend any extra entrypoint args (e.g. "--" from "tini -- entrypoint.sh"),
+        # then append original CMD args (e.g. "remote") to preserve run mode
+        if [ ${#shift_ep_args[@]} -gt 0 ]; then
+            run_args+=("${shift_ep_args[@]}")
+        fi
+        if [ -n "$cmd_args" ]; then
+            while IFS= read -r ca; do [ -n "$ca" ] && run_args+=("$ca"); done <<< "$cmd_args"
+        fi
+        local restart_output
+        debug_cmd docker run "${run_args[@]}"
+        restart_output=$(docker run "${run_args[@]}" 2>&1) || { echo "Warning: failed to restart $name" >&2; echo "$restart_output" >&2; }
+        echo "  $name restarted with new image"
+    done <<< "$containers"
+
+    echo ""
+    echo "All containers restarted with $pull_image"
+}
+
+# ── Dispatch ──────────────────────────────────────────────────────
+case "$COMMAND" in
+    run)    cmd_run "$@" ;;
+    remote) cmd_remote "$@" ;;
+    ssh)    cmd_ssh "$@" ;;
+    shell)  cmd_shell "$@" ;;
+    stop)   cmd_stop "$@" ;;
+    update) cmd_update "$@" ;;
+    ls)     cmd_ls ;;
+    config) cmd_config ;;
+    help)   show_help "$@" ;;
+    *)      echo "Unknown command: $COMMAND" >&2; show_help ;;
+esac

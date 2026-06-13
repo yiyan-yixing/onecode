@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+INSTALL_DIR="${INSTALL_DIR:-$HOME/bin}"
+SRC="$(cd "$(dirname "$0")" && pwd)/oc"
+
+mkdir -p "$INSTALL_DIR"
+ln -sf "$SRC" "$INSTALL_DIR/oc"
+
+# Ensure INSTALL_DIR is in PATH
+case ":$PATH:" in
+    *":$INSTALL_DIR:"*) ;;
+    *) echo 'export PATH="$HOME/bin:$PATH"' >> ~/.zshrc ;;
+esac
+
+echo "Installed oc -> $INSTALL_DIR/oc"
+echo "Run 'source ~/.zshrc' or open a new terminal, then: oc"
+echo ""
+echo "Cloud server? Use cloud-install.sh for one-click setup:"
+echo "  bash $(cd "$(dirname "$0")" && pwd)/cloud-install.sh"
