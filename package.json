@@ -5,9 +5,7 @@
   "private": true,
   "scripts": {
     "dev": "node agent-runtime/gateway/index.js",
-    "dev:next": "next dev -p 8000",
-    "build": "echo \"No build step needed — gateway runs directly\" && exit 0",
-    "lint-staged": "lint-staged"
+    "build": "echo \"No build step needed — gateway runs directly\" && exit 0"
   },
   "repository": {
     "type": "git",
