@@ -6,7 +6,7 @@
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│  OneCode · AI 原生 IDE     v0.2   [Skills▼] [New] [VS Code] │
+│  OneCode · AI 原生 IDE     v0.3   [Skills▼] [New] [VS Code] │
 ├──────────┬──────────────────────────────────────────────────┤
 │  Files   │                                                    │
 │  ~ /src  │   ┌────────────────────────────────────────┐      │
@@ -43,13 +43,13 @@ git clone https://github.com/yiyan-yixing/onecode.git
 cd onecode
 
 # 一键安装 oc CLI + Docker 镜像
-bash agent-runtime/bin/cloud-install.sh
+bash agent-runtime/bin/install.sh
 ```
 
 安装过程中会：
 1. 检测环境（OS / 架构）
 2. 安装 Docker（如未安装）
-3. 拉取镜像 `ghcr.io/yiyan-yixing/agent-runtime:latest`
+3. 拉取镜像 `ghcr.io/yiyan-yixing/onecode:latest`
 4. 安装 `oc` 命令到 `~/bin/oc`
 5. 保存配置到 `~/.onecode/settings.json`
 
@@ -74,7 +74,75 @@ source ~/.bashrc
 ### 从源码构建镜像
 
 ```bash
-docker build -t ghcr.io/yiyan-yixing/agent-runtime:latest agent-runtime/
+# 构建镜像（自动匹配当前架构：Apple Silicon → arm64，Intel → amd64）
+docker build -t ghcr.io/yiyan-yixing/onecode:latest agent-runtime/
+
+# 同时打版本 tag
+docker build -t ghcr.io/yiyan-yixing/onecode:latest \
+             -t ghcr.io/yiyan-yixing/onecode:0.3.5 \
+             agent-runtime/
+
+# 在 Intel 机器上强制构建 amd64 镜像
+docker build --platform linux/amd64 -t ghcr.io/yiyan-yixing/onecode:latest agent-runtime/
+```
+
+> 构建完成后，本地已有同名镜像，`oc` 命令直接可用，无需推送到远端。
+
+---
+
+## 推送镜像到 GHCR
+
+```bash
+# 1. 登录 GitHub Container Registry
+echo "$GITHUB_TOKEN" | docker login ghcr.io -u YOUR_GITHUB_USERNAME --password-stdin
+
+# 2. 推送镜像
+docker push ghcr.io/yiyan-yixing/onecode:latest
+docker push ghcr.io/yiyan-yixing/onecode:0.3.5
+
+# 3. 在 GitHub 仓库 Settings → Packages 中确认镜像可见性为 Public
+```
+
+> **权限要求**：需要仓库的 `write:packages` 权限。可在 GitHub Settings → Developer settings → Personal access tokens 创建。
+
+---
+
+## 远端服务器安装
+
+在任意 Linux/macOS 服务器上一键安装：
+
+```bash
+# 一键安装（Docker + 镜像 + oc CLI + 配置）
+curl -fsSL https://raw.githubusercontent.com/yiyan-yixing/onecode/main/agent-runtime/bin/install.sh | bash
+
+# 带参数安装（跳过交互输入）
+curl -fsSL https://raw.githubusercontent.com/yiyan-yixing/onecode/main/agent-runtime/bin/install.sh | \
+  bash -s -- --api-key sk-xxx --api-base-url https://api.anthropic.com --model claude-sonnet-4-6
+
+# 私有仓库需提供登录凭据
+curl -fsSL https://raw.githubusercontent.com/yiyan-yixing/onecode/main/agent-runtime/bin/install.sh | \
+  bash -s -- --registry-user YOUR_USER --registry-pass YOUR_PAT
+
+# 已有 Docker，只装 oc CLI
+curl -fsSL https://raw.githubusercontent.com/yiyan-yixing/onecode/main/agent-runtime/bin/install.sh | \
+  bash -s -- --skip-docker
+
+# 安装指定版本
+curl -fsSL https://raw.githubusercontent.com/yiyan-yixing/onecode/main/agent-runtime/bin/install.sh | \
+  bash -s -- --tag 0.3.5
+```
+
+安装完成后刷新 PATH：
+
+```bash
+source ~/.bashrc    # Linux
+source ~/.zshrc     # macOS
+```
+
+安装脚本 `install.sh` 支持 `--help` 查看全部选项：
+
+```bash
+bash agent-runtime/bin/install.sh --help
 ```
 
 ---
@@ -149,11 +217,11 @@ oc update
 ```bash
 docker run -it --rm \
   -e API_KEY=your-key \
-  -e MODEL=GLM-5.1 \
+  -e MODEL=claude-sonnet-4-6 \
   -p 7681:7681 \
   -p 8000:8000 \
   -v $(pwd):/workspace \
-  ghcr.io/yiyan-yixing/agent-runtime:latest \
+  ghcr.io/yiyan-yixing/onecode:latest \
   remote
 ```
 
@@ -207,7 +275,7 @@ npm run dev
 ## 核心特性
 
 - **xterm.js 终端** — 直接与 Claude Code 交互，PTY 直连
-- **10 Agent 角色** — CEO/PM/设计师/架构师/开发者/DevOps/QA/运营/数据/财务
+- **Agent 角色** — 从 `.claude/agents/*.md` 动态加载，终端中输入 `@dev` 自动路由到对应角色
 - **@角色名 快捷输入** — 终端中输入 `@dev` 自动路由到对应角色
 - **文件浏览器** — 侧栏浏览项目文件，点击预览
 - **代码预览** — 语法高亮、Markdown 渲染、图片预览
@@ -217,18 +285,48 @@ npm run dev
 
 ### Agent 角色
 
-| 角色 | 代号 | 使命 | 时间占比 |
-|------|------|------|----------|
-| CEO | @ceo | 战略方向、重大决策、全局监控 | 10% |
-| 产品经理 | @pm | 做用户真正需要的产品 | 15% |
-| 设计师 | @designer | 最短时间把想法变成可感知的界面 | 15% |
-| 架构师 | @architect | 做正确的技术选型，防止架构债务 | 5% |
-| 开发者 | @dev | 高质量可持续地交付代码 | 25% |
-| DevOps | @devops | 极致快速的开发工具链 | 10% |
-| 测试 | @qa | 不让 bug 流入生产环境 | 5% |
-| 运营 | @ops | 让产品被需要的人看到 | 10% |
-| 数据 | @data | 用数据驱动每一个决策 | 10% |
-| 财务 | @fin | 守住现金流生命线 | 5% |
+Agent 角色从 `.claude/agents/*.md` 文件动态加载，无需修改前端代码即可增减角色。
+
+**定义格式**（YAML frontmatter）：
+
+```markdown
+---
+name: Dev
+description: 一人公司开发者。用于代码编写、架构决策、Bug 修复、发布。用 @dev 调用。
+tools: Read, Write, Bash, Grep, Glob
+model: sonnet
+color: yellow
+---
+
+（Agent 的系统提示词正文...）
+```
+
+| 字段 | 说明 | 示例 |
+|------|------|------|
+| `name` | 显示名称（必填，有此字段才算有效 Agent） | `Dev` |
+| `description` | 简短描述，显示在 Agent 面板 | `一人公司开发者` |
+| `tools` | 可用工具列表 | `Read, Write, Bash` |
+| `model` | 使用的模型 | `sonnet` |
+| `color` | UI 颜色（支持颜色名或 hex） | `yellow` / `#10B981` |
+
+文件名（去 `.md`）即为 `@id`，如 `dev.md` → `@dev`。
+
+**内置角色**（项目自带的 `.claude/agents/` 目录）：
+
+| 角色 | 代号 | 颜色 |
+|------|------|------|
+| CEO | @ceo | blue |
+| PM | @pm | green |
+| Designer | @designer | purple |
+| Architect | @architect | indigo |
+| Dev | @dev | yellow |
+| DevOps | @devops | orange |
+| QA | @qa | red |
+| Ops | @ops | magenta |
+| Data | @data | teal |
+| Fin | @fin | cyan |
+
+没有 Agent 时，面板显示空状态提示："在 .claude/agents/ 下创建 .md 文件来添加智能体"。
 
 ---
 
@@ -247,7 +345,7 @@ onecode/
 │   ├── bin/                    # CLI 工具
 │   │   ├── oc                 # OneCode CLI 主命令
 │   │   ├── install            # 安装 oc 到 ~/bin/
-│   │   ├── cloud-install.sh   # 一键安装脚本
+│   │   ├── install.sh          # 一键安装脚本
 │   │   └── start-remote.sh    # 容器内启动脚本
 │   ├── Dockerfile              # 镜像定义
 │   └── entrypoint.sh           # 入口脚本
@@ -295,5 +393,6 @@ oc stop <container-name>
 
 | 版本 | 说明 |
 |------|------|
+| v0.3.5 | 动态 Agent 加载（.claude/agents/*.md）、oc 首次引导配置、自动架构检测 |
 | v0.2.0 | gateway + PTY + xterm.js + Agent 角色侧栏 + oc CLI |
 | v0.1.0 | Next.js MVP：Chat + Monaco Editor + @角色名 + 模拟数据 |

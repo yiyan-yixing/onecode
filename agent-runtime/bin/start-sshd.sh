@@ -26,8 +26,8 @@ if [ ! -f /etc/ssh/ssh_host_rsa_key ]; then
     ssh-keygen -A
 fi
 
-if ! grep -q AuthorizedKeysFile /etc/ssh/sshd_config.d/agent-runtime.conf 2>/dev/null; then
-    echo "AuthorizedKeysFile /home/work/.ssh-keys/authorized_keys" >> /etc/ssh/sshd_config.d/agent-runtime.conf
+if ! grep -q AuthorizedKeysFile /etc/ssh/sshd_config.d/onecode.conf 2>/dev/null; then
+    echo "AuthorizedKeysFile /home/work/.ssh-keys/authorized_keys" >> /etc/ssh/sshd_config.d/onecode.conf
 fi
 
 /usr/sbin/sshd

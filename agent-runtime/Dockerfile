@@ -75,7 +75,8 @@ RUN ARCH=$(dpkg --print-architecture) \
 
 # code-server - Web-based VS Code (accessible via /vscode/ route)
 RUN CODE_SERVER_VERSION="4.121.0" \
-    && curl -sL "https://github.com/coder/code-server/releases/download/v${CODE_SERVER_VERSION}/code-server-${CODE_SERVER_VERSION}-linux-amd64.tar.gz" \
+    && ARCH=$(dpkg --print-architecture) \
+    && curl -sL "https://github.com/coder/code-server/releases/download/v${CODE_SERVER_VERSION}/code-server-${CODE_SERVER_VERSION}-linux-${ARCH}.tar.gz" \
        -o /tmp/code-server.tar.gz \
     && tar xzf /tmp/code-server.tar.gz -C /usr/local/lib/ \
     && ln -sf /usr/local/lib/code-server-*/bin/code-server /usr/local/bin/code-server \
@@ -132,7 +133,7 @@ COPY gateway/ /usr/local/share/gateway/
 
 # SSH server for VS Code Remote-SSH
 RUN mkdir -p /run/sshd \
-    && cat > /etc/ssh/sshd_config.d/agent-runtime.conf <<SSHD
+    && cat > /etc/ssh/sshd_config.d/onecode.conf <<SSHD
 Port 8222
 PermitRootLogin no
 PubkeyAuthentication yes
@@ -166,15 +167,15 @@ RUN mkdir -p /home/work/.local/share/code-server/User \
     && chown -R node:node /home/work/.local
 
 # Version file
-COPY VERSION /usr/local/share/agent-runtime/VERSION
+COPY VERSION /usr/local/share/onecode/VERSION
 
 # Workspace
 RUN mkdir -p /workspace && chown -R node:node /workspace
 WORKDIR /workspace
 
 # Entrypoint scripts (changing scripts only rebuilds from this layer)
-COPY bin/start-sshd.sh bin/start-remote.sh bin/setup-code-server.sh /usr/local/bin/agent-runtime/
-RUN chmod +x /usr/local/bin/agent-runtime/*.sh
+COPY bin/start-sshd.sh bin/start-remote.sh bin/setup-code-server.sh /usr/local/bin/onecode/
+RUN chmod +x /usr/local/bin/onecode/*.sh
 
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh

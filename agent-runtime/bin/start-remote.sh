@@ -32,8 +32,8 @@ if [ "${GATEWAY_HTTPS:-0}" = "1" ]; then
     GATEWAY_KEY="/tmp/gateway-key.pem"
     openssl req -x509 -newkey rsa:2048 \
         -keyout "$GATEWAY_KEY" -out "$GATEWAY_CERT" \
-        -days 365 -nodes -subj '/CN=agent-runtime' \
-        -addext 'subjectAltName=DNS:agent-runtime,IP:0.0.0.0' \
+        -days 365 -nodes -subj '/CN=onecode' \
+        -addext 'subjectAltName=DNS=onecode,IP:0.0.0.0' \
         2>/dev/null
     chown node:node "$GATEWAY_CERT" "$GATEWAY_KEY"
     export GATEWAY_CERT GATEWAY_KEY
@@ -42,9 +42,9 @@ else
 fi
 
 # Configure code-server (polyfill, product.json, API credentials)
-source /usr/local/bin/agent-runtime/setup-code-server.sh "$VSCODE_INTERNAL_PORT"
+source /usr/local/bin/onecode/setup-code-server.sh "$VSCODE_INTERNAL_PORT"
 
-NAV_POLYFILL="/usr/local/share/agent-runtime/navigator-polyfill.js"
+NAV_POLYFILL="/usr/local/share/onecode/navigator-polyfill.js"
 
 gosu node env NODE_OPTIONS="--require ${NAV_POLYFILL}" ANTHROPIC_API_KEY="$ANTHROPIC_API_KEY" ANTHROPIC_BASE_URL="$ANTHROPIC_BASE_URL" ANTHROPIC_MODEL="$ANTHROPIC_MODEL" code-server \
     --bind-addr 127.0.0.1:$VSCODE_INTERNAL_PORT \

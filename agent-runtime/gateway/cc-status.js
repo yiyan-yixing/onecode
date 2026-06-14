@@ -131,7 +131,7 @@ function cronNext(expr) {
 // --- Async loaders (non-blocking, used for all reads) ---
 
 async function loadCcStatusAsync() {
-  var result = { skills: [], hooks: {}, plugins: [], tasks: [] };
+  var result = { skills: [], hooks: {}, plugins: [], tasks: [], agents: [] };
 
   async function readFile(fp) {
     try {
@@ -283,6 +283,46 @@ async function loadCcStatusAsync() {
     await loadTaskFile(path.join(dir, 'cron-session.json'));
   }
 
+  async function loadAgents(dir, scope) {
+    const agentsDir = path.join(dir, 'agents');
+    var entries;
+    try {
+      const st = await fsp.stat(agentsDir);
+      if (!st.isDirectory()) {
+        return;
+      }
+      entries = await fsp.readdir(agentsDir);
+    } catch (_) {
+      return;
+    }
+    for (const entry of entries) {
+      if (entry.startsWith('.') || !entry.endsWith('.md')) {
+        continue;
+      }
+      const fp = path.join(agentsDir, entry);
+      try {
+        const content = await readFile(fp);
+        if (content === null) {
+          continue;
+        }
+        const fm = content.match(/^---\n([\s\S]*?)\n---/);
+        if (!fm) {
+          continue;
+        }
+        const name = (fm[1].match(/name:\s*(.+)/) || [])[1]?.trim();
+        if (!name) {
+          continue;
+        }
+        const id = entry.replace(/\.md$/, '');
+        const description = (fm[1].match(/description:\s*(.+)/) || [])[1]?.trim() || '';
+        const tools = (fm[1].match(/tools:\s*(.+)/) || [])[1]?.trim() || '';
+        const model = (fm[1].match(/model:\s*(.+)/) || [])[1]?.trim() || '';
+        const color = (fm[1].match(/color:\s*(.+)/) || [])[1]?.trim() || '';
+        result.agents.push({ id, name, description, tools, model, color, scope });
+      } catch (_) {}
+    }
+  }
+
   await loadSkills(PROJECT_DIR, 'project');
   await loadSkills(GLOBAL_DIR, 'global');
   await loadHooks(PROJECT_DIR, 'project');
@@ -291,6 +331,8 @@ async function loadCcStatusAsync() {
   await loadPlugins(GLOBAL_DIR, 'global');
   await loadTasks(PROJECT_DIR, 'project');
   await loadTasks(GLOBAL_DIR, 'global');
+  await loadAgents(PROJECT_DIR, 'project');
+  await loadAgents(GLOBAL_DIR, 'global');
 
   return result;
 }
@@ -348,7 +390,7 @@ function getCcStatus() {
       _ccRefreshInProgress = false;
     });
   }
-  return _ccStatusCache || { skills: [], hooks: {}, plugins: [], tasks: [] };
+  return _ccStatusCache || { skills: [], hooks: {}, plugins: [], tasks: [], agents: [] };
 }
 
 var _svcRegCache = null;

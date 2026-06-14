@@ -44,12 +44,12 @@ if [ -n "$MODEL" ]; then
 fi
 
 # Start SSH server (for VS Code Remote-SSH)
-source /usr/local/bin/agent-runtime/start-sshd.sh
+source /usr/local/bin/onecode/start-sshd.sh
 
 # Web terminal mode: gateway + ttyd + filebrowser
 if [ "$1" = "remote" ]; then
     shift
-    exec /usr/local/bin/agent-runtime/start-remote.sh "$@"
+    exec /usr/local/bin/onecode/start-remote.sh "$@"
 fi
 
 # CLI mode: direct claude interaction

@@ -23,8 +23,8 @@ fi
 
 # Create navigator polyfill to fix PendingMigrationError in code-server's
 # extension host (Node.js 20 doesn't provide navigator as a global)
-NAV_POLYFILL="/usr/local/share/agent-runtime/navigator-polyfill.js"
-mkdir -p /usr/local/share/agent-runtime
+NAV_POLYFILL="/usr/local/share/onecode/navigator-polyfill.js"
+mkdir -p /usr/local/share/onecode
 cat > "$NAV_POLYFILL" <<'NAVPOLY'
 // Polyfill navigator for code-server extension host on Node.js 20
 // Node.js 20 defines navigator as a getter that throws PendingMigrationError on access,

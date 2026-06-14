@@ -138,6 +138,12 @@ html{background:linear-gradient(160deg,#0a0c14 0%,#060a16 50%,#0a0e1a 100%)}
 .ai:hover .amission{display:block}
 .ai .abadge{font-size:8px;color:var(--tx3);padding:1px 4px;border-radius:8px;background:var(--sf2);flex-shrink:0;font-weight:600}
 
+/* agent empty state */
+.agent-empty{display:flex;flex-direction:column;align-items:center;justify-content:center;padding:24px 16px;gap:8px;text-align:center}
+.agent-empty-icon{font-size:28px;opacity:.5}
+.agent-empty-text{font-size:12px;color:var(--tx3);font-weight:600}
+.agent-empty-hint{font-size:10px;color:var(--tx3);opacity:.7;line-height:1.4}
+
 /* expand tab */
 .tab{position:fixed;right:0;top:45%;width:24px;height:48px;background:var(--sf);border:1px solid var(--bd);border-right:none;border-radius:var(--r) 0 0 var(--r);cursor:pointer;display:flex;align-items:center;justify-content:center;z-index:50;opacity:0;pointer-events:none;transition:opacity .25s,color .15s,transform .15s;transform:translateX(4px)}
 .tab.on{opacity:.6;pointer-events:auto;transform:translateX(0)}
@@ -370,36 +376,33 @@ var cfg={{CONFIG}},API='/files/api',tk='';
 if(cfg.version)document.getElementById('ver').textContent='v'+cfg.version;
 
 /* ── Agent Roles Data ── */
-var AGENT_ROLES=[
-{id:'ceo',name:'CEO',nameZh:'CEO',mission:'战略方向、重大决策、全局监控',icon:'👔',color:'#8B5CF6',time:10},
-{id:'pm',name:'PM',nameZh:'产品经理',mission:'做用户真正需要的产品',icon:'📋',color:'#3B82F6',time:15},
-{id:'designer',name:'Designer',nameZh:'设计师',mission:'最短时间把想法变成可感知的界面',icon:'🎨',color:'#EC4899',time:15},
-{id:'architect',name:'Architect',nameZh:'架构师',mission:'做正确的技术选型，防止架构债务',icon:'🏗️',color:'#F59E0B',time:5},
-{id:'dev',name:'Dev',nameZh:'开发者',mission:'高质量可持续地交付代码',icon:'💻',color:'#10B981',time:25},
-{id:'devops',name:'DevOps',nameZh:'DevOps',mission:'极致快速的开发工具链',icon:'🔧',color:'#6366F1',time:10},
-{id:'qa',name:'QA',nameZh:'测试',mission:'不让 bug 流入生产环境',icon:'🛡️',color:'#EF4444',time:5},
-{id:'ops',name:'Ops',nameZh:'运营',mission:'让产品被需要的人看到',icon:'📢',color:'#14B8A6',time:10},
-{id:'data',name:'Data',nameZh:'数据',mission:'用数据驱动每一个决策',icon:'📊',color:'#F97316',time:10},
-{id:'fin',name:'Fin',nameZh:'财务',mission:'守住现金流生命线',icon:'💰',color:'#84CC16',time:5}
-];
+var agentRoles=[];
+
+/* Color name → hex mapping */
+var COLOR_MAP={red:'#EF4444',orange:'#F97316',yellow:'#F59E0B',green:'#10B981',teal:'#14B8A6',cyan:'#06B6D4',blue:'#3B82F6',indigo:'#6366F1',purple:'#8B5CF6',magenta:'#EC4899',pink:'#F472B6',lime:'#84CC16'};
 
 /* ── Render Agent Panel ── */
 var activeAgent=null;
 function renderAgents(){
+var sec=document.getElementById('agentSec');
+if(!agentRoles.length){
+  sec.innerHTML='<div class="agent-empty"><div class="agent-empty-icon">🤖</div><div class="agent-empty-text">暂无智能体</div><div class="agent-empty-hint">在 .claude/agents/ 下创建 .md 文件来添加智能体</div></div>';
+  return;
+}
 var h='';
-AGENT_ROLES.forEach(function(r){
+agentRoles.forEach(function(r){
   var cls=activeAgent===r.id?' act':'';
-  h+='<div class="ai'+cls+'" data-agent="'+r.id+'"><span class="aicon" style="background:'+r.color+'18;color:'+r.color+'">'+r.icon+'</span><span class="aname">'+r.nameZh+'</span><span class="amission">'+esc(r.mission)+'</span><span class="abadge">'+r.time+'%</span></div>';
+  h+='<div class="ai'+cls+'" data-agent="'+r.id+'"><span class="aicon" style="background:'+r.color+'18;color:'+r.color+'">🤖</span><span class="aname">'+esc(r.name)+'</span><span class="amission">'+esc(r.description)+'</span></div>';
 });
-document.getElementById('agentSec').innerHTML=h;
-document.querySelectorAll('.ai').forEach(function(el){
+sec.innerHTML=h;
+sec.querySelectorAll('.ai').forEach(function(el){
   el.onclick=function(){
     var aid=el.dataset.agent;
     activeAgent=aid;
     renderAgents();
     /* Send @role to terminal */
-    if(ws&&ws.readyState===1){
-      ws.send('@'+aid+' ');
+    if(window.termWs&&window.termWs.readyState===1){
+      window.termWs.send('@'+aid+' ');
     }
   };
 });
@@ -422,13 +425,13 @@ var mentionPrefix='';
 
 function showMention(prefix){
 mentionPrefix=prefix.toLowerCase();
-var matches=AGENT_ROLES.filter(function(r){
-  return r.id.startsWith(mentionPrefix)||r.nameZh.startsWith(mentionPrefix)||r.name.toLowerCase().startsWith(mentionPrefix);
+var matches=agentRoles.filter(function(r){
+  return r.id.startsWith(mentionPrefix)||r.name.toLowerCase().startsWith(mentionPrefix);
 });
 if(!matches.length){hideMention();return;}
 var h='';
 matches.forEach(function(r,i){
-  h+='<div class="mp-item'+(i===mentionIdx?' sel':'')+'" data-agent="'+r.id+'"><span class="mp-icon" style="background:'+r.color+'18;color:'+r.color+'">'+r.icon+'</span><span class="mp-name">'+r.nameZh+'</span><span class="mp-id">@'+r.id+'</span><span class="mp-mission">'+esc(r.mission)+'</span></div>';
+  h+='<div class="mp-item'+(i===mentionIdx?' sel':'')+'" data-agent="'+r.id+'"><span class="mp-icon" style="background:'+r.color+'18;color:'+r.color+'">🤖</span><span class="mp-name">'+esc(r.name)+'</span><span class="mp-id">@'+r.id+'</span><span class="mp-mission">'+esc(r.description)+'</span></div>';
 });
 mentionPop.innerHTML=h;
 mentionPop.classList.add('on');
@@ -441,11 +444,11 @@ mentionPop.querySelectorAll('.mp-item').forEach(function(el){
     activeAgent=aid;
     renderAgents();
     /* Clear the @prefix from terminal and send full @mention */
-    if(ws&&ws.readyState===1){
+    if(window.termWs&&window.termWs.readyState===1){
       /* Send backspace to clear typed @prefix, then send @roleId */
       var delCount=mentionPrefix.length+1; /* +1 for @ */
-      for(var d=0;d<delCount;d++){ws.send('\x7f');}
-      ws.send('@'+aid+' ');
+      for(var d=0;d<delCount;d++){window.termWs.send('\x7f');}
+      window.termWs.send('@'+aid+' ');
     }
     hideMention();
   };
@@ -475,6 +478,17 @@ function renderCcBadges(){
   fetch('/api/cc-status').then(function(r){return r.json()}).then(function(d){
     ccFetching=false;
     ccData=d;
+    /* Load agents from cc-status if available */
+    if(d.agents&&d.agents.length){
+      agentRoles=d.agents.map(function(a){
+        var c=COLOR_MAP[a.color]||a.color||'#6B7280';
+        if(c.charAt(0)!=='#')c='#6B7280';
+        return{id:a.id,name:a.name,description:a.description,color:c};
+      });
+    }else{
+      agentRoles=[];
+    }
+    renderAgents();
     var sk=d.skills.length,hk=Object.keys(d.hooks).reduce(function(s,k){return s+d.hooks[k].length},0),pl=d.plugins.length,tk=d.tasks.length;
     var counts=sk+':'+hk+':'+pl+':'+tk;
     if(counts!==ccPrevCounts){

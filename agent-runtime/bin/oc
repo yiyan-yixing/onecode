@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-IMAGE_REPO="ghcr.io/yiyan-yixing/agent-runtime"
+IMAGE_REPO="ghcr.io/yiyan-yixing/onecode"
 IMAGE="${AGENT_RUNTIME_IMAGE:-${IMAGE_REPO}:latest}"
-PLATFORM="${AGENT_RUNTIME_PLATFORM:-linux/amd64}"
+PLATFORM="${AGENT_RUNTIME_PLATFORM:-linux/$(uname -m)}"
 IMAGE_TAG=""
 OC_VERSION="0.2.5"
 
@@ -45,21 +45,61 @@ load_config
 [ -n "$_env_api_key" ]  && API_KEY="$_env_api_key"      || true
 [ -n "$_env_base_url" ] && API_BASE_URL="$_env_base_url" || true
 [ -n "$_env_model" ]    && MODEL="$_env_model"           || true
-API_BASE_URL="${API_BASE_URL:-https://api.anthropic.com}"
-MODEL="${MODEL:-GLM-5.1}"
 
-resolve_api_key() {
+# ── First-run setup & config resolution ─────────────────────────────
+resolve_config() {
+    # If all three are set (via env or config file), we're good
+    if [ -n "${API_KEY:-}" ] && [ -n "${API_BASE_URL:-}" ] && [ -n "${MODEL:-}" ]; then
+        export API_KEY API_BASE_URL MODEL
+        return 0
+    fi
+
+    # First run: no config file → interactive setup
+    if [ ! -f "$OC_CONFIG" ]; then
+        cat <<'WELCOME'
+
+  ╔═══════════════════════════════════════════════╗
+  ║          Welcome to OneCode! 🚀               ║
+  ║                                               ║
+  ║  First run — let's configure your LLM API.   ║
+  ║  Settings will be saved to ~/.onecode/        ║
+  ╚═══════════════════════════════════════════════╝
+
+WELCOME
+    fi
+
+    # API_BASE_URL
+    if [ -z "${API_BASE_URL:-}" ]; then
+        echo "API Base URL (press Enter for Anthropic: https://api.anthropic.com)"
+        read -rp "  API_BASE_URL: " API_BASE_URL
+        API_BASE_URL="${API_BASE_URL:-https://api.anthropic.com}"
+        echo ""
+    fi
+
+    # API_KEY
     if [ -z "${API_KEY:-}" ]; then
-        read -rsp "Enter API_KEY: " API_KEY
+        read -rsp "API Key (input hidden): " API_KEY
         echo
         if [ -z "$API_KEY" ]; then
             echo "Error: API_KEY is required" >&2
             exit 1
         fi
-        save_config
-        echo "API_KEY saved to ~/.onecode/settings.json"
+        echo ""
     fi
-    export API_KEY
+
+    # MODEL
+    if [ -z "${MODEL:-}" ]; then
+        echo "Model name (press Enter for claude-sonnet-4-6)"
+        read -rp "  MODEL: " MODEL
+        MODEL="${MODEL:-claude-sonnet-4-6}"
+        echo ""
+    fi
+
+    save_config
+    echo "✓ Config saved to ~/.onecode/settings.json"
+    echo ""
+
+    export API_KEY API_BASE_URL MODEL
 }
 
 # ── Docker common args ────────────────────────────────────────────
@@ -295,8 +335,8 @@ oc update — Pull image and optionally restart containers
 
 Usage: oc update [options]
 
-Pulls the agent-runtime image from the registry.
-Also updates the oc CLI itself by running cloud-install.sh from the remote.
+Pulls the onecode image from the registry.
+Also updates the oc CLI itself by running install.sh from the remote.
 If running containers are detected, offers to restart them
 with the new image (preserving the same name, mounts, and env).
 
@@ -318,7 +358,7 @@ oc ls — List oc containers and image
 
 Usage: oc ls
 
-Shows all containers using the agent-runtime image and the
+Shows all containers using the onecode image and the
 available image versions.
 
 Output:
@@ -433,7 +473,7 @@ debug_cmd() {
 # ── Subcommands ───────────────────────────────────────────────────
 
 cmd_run() {
-    resolve_api_key
+    resolve_config
     build_docker_args
     args+=(--rm -it "$IMAGE" claude)
     debug_cmd docker run "${args[@]}" "$@"
@@ -441,7 +481,7 @@ cmd_run() {
 }
 
 cmd_remote() {
-    resolve_api_key
+    resolve_config
     build_docker_args
     local p="${PORT:-7681}"
     local ap="${APP_PORT:-8000}"
@@ -599,7 +639,7 @@ cmd_shell() {
         exec docker exec -it "$1" /bin/bash
     fi
     # Otherwise start a new shell container
-    resolve_api_key
+    resolve_config
     build_docker_args
     args+=(--rm -it "$IMAGE" /bin/bash)
     debug_cmd docker run "${args[@]}"
@@ -628,14 +668,14 @@ cmd_ls() {
     echo "=== Containers ==="
     docker ps -a --format "{{.ID}}\t{{.Names}}\t{{.Status}}\t{{.Ports}}" 2>/dev/null | while IFS=$'\t' read -r id name status ports; do
         img=$(docker inspect "$id" --format '{{.Config.Image}}' 2>/dev/null || true)
-        if echo "$img" | grep -q "agent-runtime"; then
+        if echo "$img" | grep -q "onecode"; then
             mount_src=$(docker inspect "$id" --format '{{range .Mounts}}{{if eq .Destination "/workspace"}}{{.Source}}{{end}}{{end}}' 2>/dev/null || true)
             printf "%s\t%s\t%s\t%s\n" "$name" "$status" "$ports" "$mount_src"
         fi
     done | column -t -s $'\t' 2>/dev/null || true
     echo ""
     echo "=== Image ==="
-    docker images "ghcr.io/yiyan-yixing/agent-runtime" --format "table {{.Repository}}:{{.Tag}}\t{{.Size}}\t{{.CreatedAt}}" 2>/dev/null || true
+    docker images "ghcr.io/yiyan-yixing/onecode" --format "table {{.Repository}}:{{.Tag}}\t{{.Size}}\t{{.CreatedAt}}" 2>/dev/null || true
 }
 
 cmd_config() {
@@ -683,21 +723,21 @@ cmd_update() {
     debug_cmd docker pull --platform "$PLATFORM" "$pull_image"
     docker pull --platform "$PLATFORM" "$pull_image"
 
-    # Self-update oc CLI via cloud-install.sh
-    local install_url="https://raw.githubusercontent.com/yiyan-yixing/onecode/main/agent-runtime/bin/cloud-install.sh"
+    # Self-update oc CLI via install.sh
+    local install_url="https://raw.githubusercontent.com/yiyan-yixing/onecode/main/agent-runtime/bin/install.sh"
     echo "Updating oc CLI from ${install_url} ..."
     local install_script
     install_script=$(curl -fsSL "$install_url" 2>/dev/null) || true
     if [ -n "$install_script" ]; then
         # Verify script integrity with SHA256 if checksum file is available
-        local checksum_url="https://raw.githubusercontent.com/yiyan-yixing/onecode/main/agent-runtime/bin/cloud-install.sh.sha256"
+        local checksum_url="https://raw.githubusercontent.com/yiyan-yixing/onecode/main/agent-runtime/bin/install.sh.sha256"
         local checksum
         checksum=$(curl -fsSL "$checksum_url" 2>/dev/null || true)
         if [ -n "$checksum" ]; then
             local actual
             actual=$(echo "$install_script" | sha256sum | awk '{print $1}')
             if [ "$actual" != "$checksum" ]; then
-                echo "Error: checksum mismatch for cloud-install.sh (expected $checksum, got $actual)" >&2
+                echo "Error: checksum mismatch for install.sh (expected $checksum, got $actual)" >&2
                 echo "CLI not updated for safety." >&2
             else
                 echo "$install_script" | bash -s -- --skip-docker --tag "$target_version"
@@ -707,7 +747,7 @@ cmd_update() {
             echo "$install_script" | bash -s -- --skip-docker --tag "$target_version"
         fi
     else
-        echo "Warning: could not fetch cloud-install.sh, CLI not updated"
+        echo "Warning: could not fetch install.sh, CLI not updated"
     fi
 
     # Show what changed
