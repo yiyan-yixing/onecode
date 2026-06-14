@@ -14,7 +14,10 @@ VERSION="0.3.5"
 IMAGE_REPO="ghcr.io/yiyan-yixing/onecode"
 IMAGE_TAG="latest"
 OC_HOME="${OC_HOME:-$HOME/.onecode}"
-INSTALL_DIR="${INSTALL_DIR:-$HOME/bin}"
+INSTALL_DIR="${INSTALL_DIR:-$HOME/.local/bin}"
+REPO_OWNER="yiyan-yixing"
+REPO_NAME="onecode"
+REPO_BRANCH="main"
 
 # Defaults
 API_KEY=""
@@ -23,6 +26,7 @@ MODEL="GLM-5.1"
 REGISTRY_USER=""
 REGISTRY_PASS=""
 SKIP_DOCKER=false
+GITHUB_TOKEN="${GITHUB_TOKEN:-}"
 
 # ── Colors ─────────────────────────────────────────────────────────
 RED='\033[0;31m'
@@ -35,6 +39,19 @@ info()  { echo -e "${CYAN}[info]${NC} $*"; }
 ok()    { echo -e "${GREEN}[ok]${NC} $*"; }
 warn()  { echo -e "${YELLOW}[warn]${NC} $*"; }
 err()   { echo -e "${RED}[error]${NC} $*" >&2; }
+
+# ── GitHub fetch helper ────────────────────────────────────────────
+# Supports private repos (via GITHUB_TOKEN) and China network (avoids raw.githubusercontent.com SSL issues)
+github_fetch() {
+    local path="$1"
+    local api_url="https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/contents/${path}?ref=${REPO_BRANCH}"
+    local raw_url="https://raw.githubusercontent.com/${REPO_OWNER}/${REPO_NAME}/${REPO_BRANCH}/${path}"
+    if [ -n "${GITHUB_TOKEN:-}" ]; then
+        curl -fsSL -H "Authorization: token ${GITHUB_TOKEN}" -H "Accept: application/vnd.github.v3.raw" "$api_url" 2>/dev/null
+    else
+        curl -fsSL "$raw_url" 2>/dev/null || curl -fsSL -H "Accept: application/vnd.github.v3.raw" "$api_url" 2>/dev/null
+    fi
+}
 
 # ── Banner ─────────────────────────────────────────────────────────
 show_banner() {
@@ -60,6 +77,7 @@ Options:
   --model NAME          Model name (default: ${MODEL})
   --registry-user USER  Container registry login username
   --registry-pass PASS  Container registry login password
+  --github-token TOKEN  GitHub PAT for private repo access (or set GITHUB_TOKEN env)
   --tag TAG             Image tag (default: ${IMAGE_TAG})
   --skip-docker         Skip Docker installation (assume already installed)
   -h, --help            Show this help
@@ -80,6 +98,7 @@ while [ $# -gt 0 ]; do
         --model)          MODEL="$2"; shift 2 ;;
         --registry-user)  REGISTRY_USER="$2"; shift 2 ;;
         --registry-pass)  REGISTRY_PASS="$2"; shift 2 ;;
+        --github-token)   GITHUB_TOKEN="$2"; shift 2 ;;
         --tag)            IMAGE_TAG="$2"; shift 2 ;;
         --skip-docker)    SKIP_DOCKER=true; shift ;;
         --yes)            shift ;;

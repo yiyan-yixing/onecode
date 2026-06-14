@@ -5,7 +5,23 @@ IMAGE_REPO="ghcr.io/yiyan-yixing/onecode"
 IMAGE="${AGENT_RUNTIME_IMAGE:-${IMAGE_REPO}:latest}"
 PLATFORM="${AGENT_RUNTIME_PLATFORM:-linux/$(uname -m)}"
 IMAGE_TAG=""
-OC_VERSION="0.2.5"
+OC_VERSION="0.3.5"
+REPO_OWNER="yiyan-yixing"
+REPO_NAME="onecode"
+REPO_BRANCH="main"
+
+# ── GitHub fetch helper ────────────────────────────────────────────
+# Supports private repos (via GITHUB_TOKEN) and China network (avoids raw.githubusercontent.com SSL issues)
+github_fetch() {
+    local path="$1"
+    local api_url="https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/contents/${path}?ref=${REPO_BRANCH}"
+    local raw_url="https://raw.githubusercontent.com/${REPO_OWNER}/${REPO_NAME}/${REPO_BRANCH}/${path}"
+    if [ -n "${GITHUB_TOKEN:-}" ]; then
+        curl -fsSL -H "Authorization: token ${GITHUB_TOKEN}" -H "Accept: application/vnd.github.v3.raw" "$api_url" 2>/dev/null
+    else
+        curl -fsSL "$raw_url" 2>/dev/null || curl -fsSL -H "Accept: application/vnd.github.v3.raw" "$api_url" 2>/dev/null
+    fi
+}
 
 # ── Config ────────────────────────────────────────────────────────
 OC_HOME="${OC_HOME:-$HOME/.onecode}"
@@ -702,12 +718,11 @@ cmd_update() {
     done
 
     # Determine target version
-    local remote_version_url="https://raw.githubusercontent.com/yiyan-yixing/onecode/main/agent-runtime/VERSION"
     local target_version="$update_tag"
 
     if [ -z "$target_version" ]; then
-        echo "Checking latest version from ${remote_version_url} ..."
-        target_version=$(curl -fsSL "$remote_version_url" 2>/dev/null | tr -d '[:space:]') || true
+        echo "Checking latest version via GitHub API ..."
+        target_version=$(github_fetch "agent-runtime/VERSION" | tr -d '[:space:]') || true
         if [ -z "$target_version" ]; then
             echo "Warning: could not fetch remote version, falling back to current image"
             target_version="latest"
@@ -724,15 +739,13 @@ cmd_update() {
     docker pull --platform "$PLATFORM" "$pull_image"
 
     # Self-update oc CLI via install.sh
-    local install_url="https://raw.githubusercontent.com/yiyan-yixing/onecode/main/agent-runtime/bin/install.sh"
-    echo "Updating oc CLI from ${install_url} ..."
+    echo "Updating oc CLI via GitHub API ..."
     local install_script
-    install_script=$(curl -fsSL "$install_url" 2>/dev/null) || true
+    install_script=$(github_fetch "agent-runtime/bin/install.sh") || true
     if [ -n "$install_script" ]; then
         # Verify script integrity with SHA256 if checksum file is available
-        local checksum_url="https://raw.githubusercontent.com/yiyan-yixing/onecode/main/agent-runtime/bin/install.sh.sha256"
         local checksum
-        checksum=$(curl -fsSL "$checksum_url" 2>/dev/null || true)
+        checksum=$(github_fetch "agent-runtime/bin/install.sh.sha256" || true)
         if [ -n "$checksum" ]; then
             local actual
             actual=$(echo "$install_script" | sha256sum | awk '{print $1}')

@@ -50,7 +50,7 @@ bash agent-runtime/bin/install.sh
 1. 检测环境（OS / 架构）
 2. 安装 Docker（如未安装）
 3. 拉取镜像 `ghcr.io/yiyan-yixing/onecode:latest`
-4. 安装 `oc` 命令到 `~/bin/oc`
+4. 安装 `oc` 命令到 `~/.local/bin/oc`
 5. 保存配置到 `~/.onecode/settings.json`
 
 安装完成后刷新 PATH：
@@ -67,7 +67,7 @@ source ~/.zshrc     # macOS
 ```bash
 cd onecode
 bash agent-runtime/bin/install
-# 安装 oc -> ~/bin/oc
+# 安装 oc -> ~/.local/bin/oc
 source ~/.bashrc
 ```
 
@@ -131,6 +131,26 @@ curl -fsSL https://raw.githubusercontent.com/yiyan-yixing/onecode/main/agent-run
 curl -fsSL https://raw.githubusercontent.com/yiyan-yixing/onecode/main/agent-runtime/bin/install.sh | \
   bash -s -- --tag 0.3.5
 ```
+
+> **中国网络 / 私有仓库**：如果 `raw.githubusercontent.com` 出现 SSL 错误，或仓库是私有的，设置 `GITHUB_TOKEN` 后通过 GitHub API 下载：
+>
+> ```bash
+> # 1. 先获取 install.sh（通过 GitHub API，绕过 SSL 问题 + 支持私有仓库）
+> GITHUB_TOKEN=ghp_xxx curl -fsSL \
+>   -H "Authorization: token $GITHUB_TOKEN" \
+>   -H "Accept: application/vnd.github.v3.raw" \
+>   "https://api.github.com/repos/yiyan-yixing/onecode/contents/agent-runtime/bin/install.sh?ref=main" \
+>   -o /tmp/onecode-install.sh
+>
+> # 2. 执行安装（GITHUB_TOKEN 同时用于镜像拉取和后续更新）
+> GITHUB_TOKEN=ghp_xxx bash /tmp/onecode-install.sh --api-key sk-xxx
+>
+> # 或一行搞定：
+> GITHUB_TOKEN=ghp_xxx bash <(curl -fsSL \
+>   -H "Authorization: token $GITHUB_TOKEN" \
+>   -H "Accept: application/vnd.github.v3.raw" \
+>   "https://api.github.com/repos/yiyan-yixing/onecode/contents/agent-runtime/bin/install.sh?ref=main")
+> ```
 
 安装完成后刷新 PATH：
 
@@ -237,7 +257,7 @@ docker run -it --rm \
 |------|------|--------|
 | `API_KEY` | API 密钥（映射到 `ANTHROPIC_API_KEY`） | 必填 |
 | `API_BASE_URL` | API 地址（映射到 `ANTHROPIC_BASE_URL`） | `https://api.anthropic.com` |
-| `MODEL` | 模型名（映射到 `ANTHROPIC_MODEL`） | `GLM-5.1` |
+| `MODEL` | 模型名（映射到 `ANTHROPIC_MODEL`） | `claude-sonnet-4-6` |
 | `GATEWAY_HTTPS` | 启用 HTTPS | `0` |
 | `TERM_TOKEN` | 终端访问 Token（留空则无需认证） | 空 |
 
@@ -251,7 +271,7 @@ docker run -it --rm \
 {
   "API_KEY": "sk-xxx",
   "API_BASE_URL": "https://api.anthropic.com",
-  "MODEL": "GLM-5.1"
+  "MODEL": "claude-sonnet-4-6"
 }
 ```
 
@@ -344,7 +364,7 @@ onecode/
 │   │   └── ...
 │   ├── bin/                    # CLI 工具
 │   │   ├── oc                 # OneCode CLI 主命令
-│   │   ├── install            # 安装 oc 到 ~/bin/
+│   │   ├── install            # 安装 oc 到 ~/.local/bin/
 │   │   ├── install.sh          # 一键安装脚本
 │   │   └── start-remote.sh    # 容器内启动脚本
 │   ├── Dockerfile              # 镜像定义
