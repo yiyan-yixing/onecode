@@ -1,6 +1,6 @@
 {
   "name": "onecode",
-  "version": "0.2.0",
+  "version": "0.3.5",
   "description": "OneCode — AI 原生 IDE，以 Claude Code 为内核的容器化开发环境",
   "private": true,
   "scripts": {
@@ -9,7 +9,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "ssh://git@github.com:yiyan-yixing/onecode.git"
+    "url": "https://github.com/yiyan-yixing/onecode.git"
   },
   "license": "UNLICENSED",
   "dependencies": {

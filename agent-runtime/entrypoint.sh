@@ -46,7 +46,7 @@ fi
 # Start SSH server (for VS Code Remote-SSH)
 source /usr/local/bin/onecode/start-sshd.sh
 
-# Web terminal mode: gateway + ttyd + filebrowser
+# Web terminal mode: gateway + filebrowser
 if [ "$1" = "remote" ]; then
     shift
     exec /usr/local/bin/onecode/start-remote.sh "$@"
