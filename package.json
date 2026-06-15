@@ -1,6 +1,6 @@
 {
   "name": "onecode",
-  "version": "0.3.5",
+  "version": "0.5.0",
   "description": "OneCode — AI 原生 IDE，以 Claude Code 为内核的容器化开发环境",
   "private": true,
   "scripts": {

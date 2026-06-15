@@ -10,7 +10,7 @@ set -euo pipefail
 #   curl -fsSL <raw-url>/install.sh | bash -s -- --api-key sk-xxx --provider anthropic
 
 # Keep in sync with agent-runtime/VERSION
-VERSION="0.4.0"
+VERSION="0.5.0"
 IMAGE_REPO="ghcr.io/yiyan-yixing/onecode"
 IMAGE_TAG="latest"
 OC_HOME="${OC_HOME:-$HOME/.onecode}"

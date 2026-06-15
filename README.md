@@ -1,6 +1,6 @@
 # OneCode — AI 原生 IDE
 
-[![Version](https://img.shields.io/badge/version-v0.4.0-blue)](https://github.com/yiyan-yixing/onecode/releases)
+[![Version](https://img.shields.io/badge/version-v0.5.0-blue)](https://github.com/yiyan-yixing/onecode/releases)
 [![License](https://img.shields.io/badge/license-MIT-green)](https://github.com/yiyan-yixing/onecode/blob/main/LICENSE)
 
 浏览器里的 AI 开发环境。Docker 一键启动，内置 10 个 Agent 角色，手机也能写代码。
@@ -272,6 +272,7 @@ onecode/
 
 | 版本 | 说明 |
 |------|------|
+| v0.5.0 | 双后端 (claude-code/opencode) + `--backend` 切换 + Docker socket 自动挂载 + 安装界面重设计 |
 | v0.4.0 | 双后端（claude-code / opencode）、`--backend` 切换、统一配置 |
 | v0.3.5 | 动态 Agent 加载、首次引导配置、自动架构检测 |
 | v0.2.0 | Gateway + PTY + xterm.js + Agent 侧栏 + oc CLI |
