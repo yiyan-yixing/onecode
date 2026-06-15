@@ -36,27 +36,88 @@ PROVIDER_DEFAULTS_anthropic_api_base_url="https://api.anthropic.com"
 PROVIDER_DEFAULTS_anthropic_model="claude-sonnet-4-6"
 PROVIDER_DEFAULTS_openai_compatible_api_base_url=""
 PROVIDER_DEFAULTS_openai_compatible_model="gpt-4o"
+PROVIDER_DEFAULTS_opencode_api_base_url=""
+PROVIDER_DEFAULTS_opencode_model="local"
 
 # v2 config defaults (used by configure())
+BACKEND="${BACKEND:-claude-code}"
 GATEWAY_PORT="7681"
 APP_PORT="8000"
 SSH_PORT="8222"
 TERM_TOKEN=""
 GATEWAY_HTTPS="false"
 
-# ── Colors ─────────────────────────────────────────────────────────
-# Use raw $'\033[..m' syntax to avoid \\033 interpretation issues
-# in echo -e/printf where backslashes in the banner text interact badly.
-RED=$'\033[0;31m'
-GREEN=$'\033[0;32m'
-YELLOW=$'\033[0;33m'
-CYAN=$'\033[0;36m'
-NC=$'\033[0m'
+# ── Colors & Output ────────────────────────────────────────────────
+# Auto-disable colors when piped (curl | bash > log.txt)
+if [ -t 1 ]; then
+    RED=$'\033[0;31m'
+    GREEN=$'\033[0;32m'
+    YELLOW=$'\033[0;33m'
+    CYAN=$'\033[0;36m'
+    DIM=$'\033[2m'
+    BOLD=$'\033[1m'
+    NC=$'\033[0m'
+else
+    RED='' GREEN='' YELLOW='' CYAN='' DIM='' BOLD='' NC=''
+fi
 
+# Terminal width (for box/line drawing; fallback to 80)
+TERM_WIDTH="${COLUMNS:-80}"
+[ "$TERM_WIDTH" -lt 50 ] 2>/dev/null && TERM_WIDTH=50
+[ "$TERM_WIDTH" -gt 80 ] 2>/dev/null && TERM_WIDTH=80
+
+# Legacy helpers (kept for internal use, prefer step_* functions)
 info()  { echo "${CYAN}[info]${NC} $*"; }
 ok()    { echo "${GREEN}[ok]${NC} $*"; }
 warn()  { echo "${YELLOW}[warn]${NC} $*"; }
 err()   { echo "${RED}[error]${NC} $*" >&2; }
+
+# Step status markers (primary user-facing output)
+step_ok()   { echo "  ${GREEN}✓${NC} $*"; }
+step_wait() { echo "  ${YELLOW}⏳${NC} $*"; }
+step_skip() { echo "  ${DIM}─${NC} $* ${DIM}(skipped)${NC}"; }
+step_err()  { echo "  ${RED}✗${NC} $*" >&2; }
+
+# Step header: ── [1/8] 检测环境 ───────────────
+step_header() {
+    local n="$1" total="$2" label="$3"
+    local line_width=$((TERM_WIDTH - 6 - ${#n} - ${#total} - ${#label} - 3))
+    [ "$line_width" -lt 5 ] && line_width=5
+    echo ""
+    echo "  ${CYAN}──${NC} [${n}/${total}] ${label} ${CYAN}$(printf '─%.0s' $(seq 1 "$line_width"))${NC}"
+}
+
+# Box drawing: ╭────╮ ... │ text │ ... ╰────╯
+show_box() {
+    local w="${1:-55}"
+    [ "$w" -lt 30 ] && w=30
+    echo "  ${CYAN}╭$(printf '─%.0s' $(seq 1 $((w-2))))╮${NC}"
+    shift
+    for line in "$@"; do
+        # Skip empty variable expansions (e.g. optional lines)
+        [ -z "$line" ] && continue
+        # Pad or truncate line to fit inside box
+        local trimmed
+        trimmed="$(printf '%-'"$((w-3))".'s' "$(echo "$line" | head -c $((w-4)))")"
+        printf "  ${CYAN}│${NC} %s ${CYAN}│${NC}\n" "$trimmed"
+    done
+    echo "  ${CYAN}╰$(printf '─%.0s' $(seq 1 $((w-2))))╯${NC}"
+}
+
+# Error box: structured error with reason + recovery
+error_box() {
+    local title="${1:-Error}"
+    shift
+    local w=55
+    echo "" >&2
+    show_box "$w" \
+        "${RED}${BOLD}${title}${NC}" \
+        "" \
+        "$@" \
+        "" \
+        "${DIM}Log: /tmp/onecode-install.log${NC}" >&2
+    echo "" >&2
+}
 
 # ── GitHub fetch helper ────────────────────────────────────────────
 # Robust download with multiple fallback strategies.
@@ -130,7 +191,9 @@ show_banner() {
     echo "${CYAN}| |_| | | | |  __/ |__| (_) | (_| |  __/${NC}"
     echo "${CYAN} \\___/|_| |_|\\___|\\____\\___/ \\__,_|\\___|${NC}"
     echo ""
-    echo "  OneCode v${VERSION} - Install"
+    echo "  ${BOLD}OneCode${NC} v${VERSION} — ${DIM}AI 原生 IDE，浏览器里写代码${NC}"
+    echo "  ${DIM}Backend: claude-code (Anthropic Claude) · opencode (MIT)${NC}"
+    echo "  ${DIM}Platform: Linux amd64/arm64 · macOS Intel/Apple Silicon${NC}"
     echo ""
 }
 
@@ -140,10 +203,11 @@ show_help() {
 Usage: install.sh [options]
 
 Options:
-  --provider NAME       API provider: anthropic or openai_compatible (default: anthropic)
+  --provider NAME       API provider: anthropic, openai_compatible, opencode (default: anthropic)
   --api-key KEY         Preset API key (skip interactive input)
   --api-base-url URL    API base URL (default: based on provider)
   --model NAME          Model name (default: based on provider)
+  --backend NAME        AI backend: claude-code or opencode (default: claude-code)
   --registry-user USER  Container registry login username
   --registry-pass PASS  Container registry login password
   --github-token TOKEN  GitHub PAT for private repo access (or set GITHUB_TOKEN env)
@@ -155,6 +219,7 @@ Examples:
   bash install.sh
   bash install.sh --api-key sk-xxx --provider anthropic
   bash install.sh --api-key sk-xxx --provider openai_compatible --api-base-url https://api.example.com
+  bash install.sh --backend opencode
   bash install.sh --registry-user foo --registry-pass bar --tag 0.4
 EOF
     exit 0
@@ -172,6 +237,7 @@ while [ $# -gt 0 ]; do
         --github-token)   GITHUB_TOKEN="$2"; shift 2 ;;
         --tag)            IMAGE_TAG="$2"; shift 2 ;;
         --skip-docker)    SKIP_DOCKER=true; shift ;;
+        --backend)       BACKEND="$2"; shift 2 ;;
         --yes)            shift ;;
         -h|--help)        show_help ;;
         *)                err "Unknown option: $1"; show_help ;;
@@ -215,7 +281,14 @@ detect_env() {
     case "$ARCH" in
         x86_64)         ARCH_ALIAS="amd64" ;;
         aarch64|arm64)  ARCH_ALIAS="arm64" ;;
-        *)              err "Unsupported architecture: $ARCH (only amd64/arm64 supported)"; exit 1 ;;
+        *)              error_box "Unsupported Architecture" \
+                        "Your CPU: ${ARCH}" \
+                        "OneCode requires amd64 (x86_64) or arm64 (aarch64)." \
+                        "" \
+                        "Recovery:" \
+                        "  • Run on an x86_64 or ARM64 machine" \
+                        "  • Report: github.com/yiyan-yixing/onecode/issues"
+                        exit 1 ;;
     esac
     PLATFORM="linux/amd64"
     info "Platform: ${PLATFORM} (host: ${UNAME_S}/${ARCH})"
@@ -234,7 +307,13 @@ detect_env() {
     elif command -v sudo &>/dev/null; then
         SUDO="sudo"
     else
-        err "Need root or sudo to install Docker"
+        error_box "Need Root or Sudo" \
+                  "Docker installation requires elevated privileges." \
+                  "" \
+                  "Recovery:" \
+                  "  • Run as root: sudo bash install.sh" \
+                  "  • Install sudo: apt install sudo (Debian/Ubuntu)" \
+                  "  • Install Docker manually: https://docs.docker.com/engine/install/"
         exit 1
     fi
 }
@@ -349,8 +428,13 @@ start_docker() {
                 fi
                 retries=$((retries - 1))
             done
-            err "Docker Desktop failed to start within 60s"
-            err "Please start Docker Desktop manually and re-run this script"
+            error_box "Docker Desktop Failed to Start" \
+                      "Waited 60s for Docker Desktop to become ready." \
+                      "" \
+                      "Recovery:" \
+                      "  • Start Docker Desktop manually" \
+                      "  • Re-run this script after Docker is running" \
+                      "  • Check: https://docs.docker.com/desktop/troubleshoot/"
             exit 1
             ;;
         *)
@@ -443,6 +527,24 @@ install_oc() {
 }
 
 # ── Step 7: Configure ──────────────────────────────────────────────
+
+# Mask API key for display: show first 7 chars + ••••
+mask_key() {
+    local key="$1"
+    [ -z "$key" ] && echo "(not set)" && return
+    echo "${key:0:7}••••"
+}
+
+# Provider display names
+provider_display() {
+    case "$1" in
+        anthropic)         echo "Anthropic Claude" ;;
+        openai_compatible) echo "OpenAI Compatible" ;;
+        opencode)          echo "OpenCode (MIT)" ;;
+        *)                 echo "$1" ;;
+    esac
+}
+
 configure() {
     mkdir -p "$OC_HOME"
 
@@ -456,121 +558,131 @@ configure() {
             old_key=$(jq -r '.API_KEY // empty' "$OC_HOME/settings.json" 2>/dev/null || true)
             old_url=$(jq -r '.API_BASE_URL // empty' "$OC_HOME/settings.json" 2>/dev/null || true)
             old_model=$(jq -r '.MODEL // empty' "$OC_HOME/settings.json" 2>/dev/null || true)
-            # Carry over to shell vars if not already set
             [ -z "$API_KEY" ] && [ -n "$old_key" ] && API_KEY="$old_key"
             [ -z "$API_BASE_URL" ] && [ -n "$old_url" ] && API_BASE_URL="$old_url"
             [ -z "$MODEL" ] && [ -n "$old_model" ] && MODEL="$old_model"
-            # Infer provider
             case "$API_BASE_URL" in
                 https://api.anthropic.com*|'') PROVIDER="anthropic" ;;
                 *) PROVIDER="openai_compatible" ;;
             esac
-            info "Config migrated (provider: $PROVIDER)"
+            step_ok "Config migrated (provider: $(provider_display "$PROVIDER"))"
         else
             info "Existing v2 config found at ${OC_HOME}/settings.json"
-            # Load existing values to fill blanks
             [ -z "$API_KEY" ] && API_KEY=$(jq -r '.api_key // empty' "$OC_HOME/settings.json" 2>/dev/null || true)
             [ -z "$PROVIDER" ] && PROVIDER=$(jq -r '.provider // empty' "$OC_HOME/settings.json" 2>/dev/null || true)
             [ -z "$API_BASE_URL" ] && API_BASE_URL=$(jq -r '.api_base_url // empty' "$OC_HOME/settings.json" 2>/dev/null || true)
             [ -z "$MODEL" ] && MODEL=$(jq -r '.model // empty' "$OC_HOME/settings.json" 2>/dev/null || true)
+            [ -z "${BACKEND:-}" ] && BACKEND=$(jq -r '.backend // empty' "$OC_HOME/settings.json" 2>/dev/null || true)
         fi
     fi
 
     # ── Interactive wizard (first run or missing fields) ─────────
-    # If no existing config, run the full first-run wizard
     if [ ! -f "$OC_HOME/settings.json" ]; then
         echo ""
-        echo "  ╔═══════════════════════════════════════════════╗"
-        echo "  ║          Welcome to OneCode! 🚀               ║"
-        echo "  ║  Let's configure your LLM API connection.     ║"
-        echo "  ╚═══════════════════════════════════════════════╝"
+        echo "  ${BOLD}? Select your AI provider:${NC}"
+        echo "    ${GREEN}1)${NC} Anthropic Claude ${DIM}(default, recommended)${NC}"
+        echo "    ${GREEN}2)${NC} OpenAI Compatible ${DIM}(any OpenAI-format API)${NC}"
+        echo "    ${GREEN}3)${NC} OpenCode ${DIM}(MIT, local models, no API key needed)${NC}"
         echo ""
 
-        # Step 1: Provider (only if not already set via --provider flag)
         if [ -z "${_PROVIDER_SET_BY_ARG:-}" ]; then
-            echo "  Step 1: Choose your API provider"
-            echo ""
-            echo "    1) Anthropic         (Claude models)"
-            echo "    2) OpenAI Compatible (any OpenAI-format API)"
-            echo ""
-            read -rp "  Select [1-2]: " _prov_choice
+            echo -n "  ▸ "
+            read -r _prov_choice
             case "$_prov_choice" in
-                2) PROVIDER="openai_compatible" ;;
-                *) PROVIDER="anthropic" ;;
+                2) PROVIDER="openai_compatible"; BACKEND="${BACKEND:-claude-code}" ;;
+                3) PROVIDER="opencode"; BACKEND="opencode" ;;
+                *) PROVIDER="anthropic"; BACKEND="${BACKEND:-claude-code}" ;;
             esac
         fi
-        echo "  Provider: ${PROVIDER}"
+        echo "  ${GREEN}✓${NC} $(provider_display "$PROVIDER")"
         echo ""
 
-        # Step 2: API Key
-        case "$PROVIDER" in
-            anthropic)
-                echo "  Step 2: API Key"
-                echo "  Get your key at: https://console.anthropic.com/"
-                ;;
-            openai_compatible)
-                echo "  Step 2: API Base URL"
-                echo "  Enter the base URL for your OpenAI-compatible API"
-                read -rp "  API Base URL (e.g. https://api.example.com/v1): " API_BASE_URL
-                echo ""
-                echo "  Step 3: API Key"
-                ;;
-        esac
-        read -rsp "  API Key (press Enter to skip, configure later with 'oc config set'): " API_KEY
-        echo
-
-        # Step 3/4: Model
-        local default_model
-        eval "default_model=\${PROVIDER_DEFAULTS_${PROVIDER}_model:-}"
-        if [ "$PROVIDER" = "anthropic" ]; then
-            echo ""
-            echo "  Step 3: Model"
+        # OpenCode doesn't need API key
+        if [ "$PROVIDER" = "opencode" ]; then
+            info "OpenCode runs local models — no API key needed."
+            [ -z "$API_BASE_URL" ] && API_BASE_URL=""
+            [ -z "$MODEL" ] && MODEL="local"
         else
+            # openai_compatible needs Base URL first
+            if [ "$PROVIDER" = "openai_compatible" ]; then
+                echo "  ${BOLD}? API Base URL${NC}"
+                echo "  ${DIM}Example: https://api.deepseek.com/v1${NC}"
+                echo -n "  ▸ "
+                read -r API_BASE_URL
+                echo "  ${GREEN}✓${NC} ${API_BASE_URL}"
+                echo ""
+            fi
+
+            # API Key (hidden input)
+            echo "  ${BOLD}? API Key${NC} ($(provider_display "$PROVIDER"))"
+            case "$PROVIDER" in
+                anthropic) echo "  ${DIM}Get yours: https://console.anthropic.com/settings/keys${NC}" ;;
+            esac
+            echo -n "  ▸ "
+            if stty -echo 2>/dev/null; then
+                read -r API_KEY
+                stty echo 2>/dev/null
+                echo ""
+            else
+                read -rs API_KEY
+                echo ""
+            fi
+            [ -n "$API_KEY" ] && echo "  ${GREEN}✓${NC} $(mask_key "$API_KEY")"
             echo ""
-            echo "  Step 4: Model"
+
+            # Model
+            local default_model
+            eval "default_model=\${PROVIDER_DEFAULTS_${PROVIDER}_model:-}"
+            echo "  ${BOLD}? Model${NC} ${DIM}(Enter for default: ${default_model})${NC}"
+            echo -n "  ▸ "
+            read -r MODEL
+            [ -z "$MODEL" ] && MODEL="$default_model"
+            echo "  ${GREEN}✓${NC} ${MODEL}"
         fi
-        echo "  Press Enter for ${default_model}, or type a model name."
-        read -rp "  Model [${default_model}]: " MODEL
-        [ -z "$MODEL" ] && MODEL="$default_model"
 
         echo ""
-        echo "  ─────────────────────────────────────"
-        echo "  Configuration summary:"
-        echo "    Provider:        ${PROVIDER}"
-        echo "    API Base URL:    ${API_BASE_URL:-<not set>}"
-        echo "    Model:           ${MODEL}"
-        echo "  ─────────────────────────────────────"
+        echo "  ${CYAN}──${NC} ${BOLD}配置确认${NC} ${CYAN}─────────────────────────────────${NC}"
+        echo "    Provider:  $(provider_display "$PROVIDER")"
+        echo "    Backend:   ${BACKEND:-claude-code}"
+        if [ "$PROVIDER" != "opencode" ]; then
+            echo "    API Key:   $(mask_key "$API_KEY")"
+            [ -n "$API_BASE_URL" ] && echo "    API URL:   ${API_BASE_URL}"
+        fi
+        echo "    Model:     ${MODEL}"
+        echo "    Config:    ${OC_HOME}/settings.json"
+        echo "  ${CYAN}────────────────────────────────────────────${NC}"
         echo ""
 
     else
         # Existing config — only prompt for truly missing values
-        # (API_KEY prompt if empty after migration/load)
-        if [ -z "$API_KEY" ]; then
+        if [ -z "$API_KEY" ] && [ "$PROVIDER" != "opencode" ]; then
             echo ""
             case "$PROVIDER" in
-                anthropic)
-                    echo "  Get your key at: https://console.anthropic.com/"
-                    ;;
-                openai_compatible)
-                    echo "  Enter your API key for ${API_BASE_URL:-your API endpoint}"
-                    ;;
+                anthropic) echo "  ${DIM}Get yours: https://console.anthropic.com/settings/keys${NC}" ;;
             esac
-            read -rsp "  API Key (press Enter to skip, configure later with 'oc config set'): " API_KEY
-            echo
+            echo -n "  ▸ API Key: "
+            if stty -echo 2>/dev/null; then
+                read -r API_KEY
+                stty echo 2>/dev/null
+                echo ""
+            else
+                read -rs API_KEY
+                echo ""
+            fi
         fi
 
-        # openai_compatible with no base URL after migration
         if [ -z "$API_BASE_URL" ] && [ "$PROVIDER" = "openai_compatible" ]; then
             echo ""
-            read -rp "  API Base URL (e.g. https://api.example.com/v1): " API_BASE_URL
+            echo -n "  ▸ API Base URL: "
+            read -r API_BASE_URL
         fi
 
-        # Model still missing after migration + defaults
         if [ -z "$MODEL" ]; then
             echo ""
             local default_model
             eval "default_model=\${PROVIDER_DEFAULTS_${PROVIDER}_model:-}"
-            read -rp "  Model [${default_model}]: " MODEL
+            echo -n "  ▸ Model [${default_model}]: "
+            read -r MODEL
             [ -z "$MODEL" ] && MODEL="$default_model"
         fi
     fi
@@ -603,37 +715,41 @@ configure() {
     '{$version:$v,$provider,$api_key,$api_base_url,$model,$backend,$docker_platform,$image_tag,$gh_mirror,$gateway_port,$app_port,$ssh_port,$term_token,$gateway_https}' \
     > "$tmp" && mv "$tmp" "$OC_HOME/settings.json" && chmod 600 "$OC_HOME/settings.json"
 
-    ok "Config saved to ${OC_HOME}/settings.json"
+    step_ok "Config saved to ${OC_HOME}/settings.json"
 }
 
 # ── Step 8: Verify ─────────────────────────────────────────────────
 verify() {
-    info "Verifying installation..."
+    step_header "✓" "4" "验证"
 
     # Docker
     if command -v docker &>/dev/null; then
-        ok "Docker: $(docker --version)"
+        local docker_ver
+        docker_ver=$(docker --version 2>/dev/null | sed 's/Docker version //' | sed 's/,.*//')
+        step_ok "Docker:  ${docker_ver}"
     else
-        warn "Docker not found in PATH (may need to re-login)"
+        step_err "Docker:  not in PATH (may need re-login)"
     fi
 
     # Image
     if docker images "${IMAGE_REPO}" --format "{{.Tag}}" 2>/dev/null | grep -q "^${IMAGE_TAG}$"; then
-        ok "Image: ${IMAGE_REPO}:${IMAGE_TAG}"
+        step_ok "Image:   ${IMAGE_REPO}:${IMAGE_TAG}"
     else
-        warn "Image not found locally (pull may have failed)"
+        step_err "Image:   not found (pull may have failed)"
     fi
 
     # oc CLI
     if command -v oc &>/dev/null; then
-        ok "oc CLI: $(command -v oc)"
+        step_ok "oc CLI:  $(command -v oc)"
     else
-        warn "oc not in PATH yet (run: source ~/.bashrc)"
+        step_skip "oc CLI:  not in PATH yet (run: source ~/.bashrc)"
     fi
 
     # Config
     if [ -f "$OC_HOME/settings.json" ]; then
-        ok "Config: ${OC_HOME}/settings.json"
+        step_ok "Config:  ${OC_HOME}/settings.json"
+    else
+        step_err "Config:  not created"
     fi
 }
 
@@ -641,91 +757,62 @@ verify() {
 main() {
     show_banner
 
-    echo "========================================="
-    echo "  Step 1/8: Detect environment"
-    echo "========================================="
+    step_header "1" "8" "检测环境"
     detect_env
+    step_ok "${OS_ID} ${OS_VERSION} (${UNAME_S}/${ARCH})"
 
-    echo ""
-    echo "========================================="
-    echo "  Step 2/8: Install jq"
-    echo "========================================="
+    step_header "2" "8" "安装 jq"
     install_jq
 
-    echo ""
-    echo "========================================="
-    echo "  Step 3/8: Install Docker"
-    echo "========================================="
+    step_header "3" "8" "安装 Docker"
     install_docker
 
-    echo ""
-    echo "========================================="
-    echo "  Step 4/8: Start Docker service"
-    echo "========================================="
+    step_header "4" "8" "启动 Docker"
     start_docker
 
-    echo ""
-    echo "========================================="
-    echo "  Step 5/8: Login registry"
-    echo "========================================="
+    step_header "5" "8" "登录镜像仓库"
     registry_login
 
-    echo ""
-    echo "========================================="
-    echo "  Step 6/8: Pull image"
-    echo "========================================="
+    step_header "6" "8" "拉取镜像"
+    info "This usually takes 1-5 min depending on network speed..."
     pull_image
 
-    echo ""
-    echo "========================================="
-    echo "  Step 7/8: Install oc CLI"
-    echo "========================================="
+    step_header "7" "8" "安装 oc CLI"
     install_oc
 
-    echo ""
-    echo "========================================="
-    echo "  Step 8/8: Configure"
-    echo "========================================="
+    step_header "8" "8" "配置"
     configure
 
-    echo ""
-    echo "========================================="
+    # Verify
     verify
 
-    echo ""
-    echo "${GREEN}  Installation complete!${NC}"
-    echo ""
-    if [ "$OS_ID" = "darwin" ]; then
-        echo "  ${YELLOW}Run this first to load PATH & Docker settings:${NC}"
-        echo "    source ~/.zshrc"
-    else
-        echo "  ${YELLOW}Run this first to load PATH:${NC}"
-        echo "    source ~/.bashrc"
-    fi
-    echo ""
-    echo "${CYAN}  Common commands:${NC}"
-    echo "    oc                              # start interactive Claude CLI"
-    echo "    oc -d /path/to/project          # mount a specific project"
-    echo "    oc remote                       # web terminal (http://localhost:7681)"
-    echo "    oc remote -p 8080               # web terminal on custom port"
-    echo "    oc ssh <name>                   # enable SSH access to a running container"
-    echo "    oc shell <name>                 # enter a running container"
-    echo "    oc stop <name>                  # stop and remove a container"
-    echo "    oc ls                           # list containers and image"
-    echo "    oc config                       # show current config"
-    echo "    oc config set api_key=sk-xxx    # set a config value"
-    echo "    oc config list                  # show all config with sources"
-    echo ""
+    # ── Completion ────────────────────────────────────────
+    local shell_rc="~/.bashrc"
+    [ "$OS_ID" = "darwin" ] && shell_rc="~/.zshrc"
+
+    local arm64_line=""
     if [ "$OS_ID" = "darwin" ] && [ "${ARCH_ALIAS:-}" = "arm64" ]; then
-        echo "${YELLOW}  Note: Running linux/amd64 image via Rosetta emulation.${NC}"
-        echo "  Make sure Docker Desktop > Settings > \"Use Rosetta for x86_64/amd64"
-        echo "  emulation on Apple Silicon\" is enabled."
-        echo ""
+        arm64_line="Apple Silicon: enable Rosetta in Docker Desktop Settings"
     fi
-    echo "  Config:  ${OC_HOME}/settings.json"
-    echo "  CLI:     ${INSTALL_DIR}/oc"
-    echo "  Image:   ${IMAGE_REPO}:${IMAGE_TAG}"
-    echo "========================================="
+
+    show_box 55 \
+        "  ${GREEN}${BOLD}✅ OneCode installed!${NC}" \
+        "" \
+        "  ${BOLD}First run:${NC}" \
+        "    source ${shell_rc}     # load PATH" \
+        "    oc remote             # → http://localhost:7681" \
+        "" \
+        "  ${BOLD}Common commands:${NC}" \
+        "    oc                     interactive AI CLI" \
+        "    oc remote              web IDE in browser" \
+        "    oc --backend opencode  MIT backend, no API key" \
+        "    oc config list         show all settings" \
+        "${arm64_line}" \
+        "" \
+        "  ${DIM}Config:   ${OC_HOME}/settings.json${NC}" \
+        "  ${DIM}CLI:      ${INSTALL_DIR}/oc${NC}" \
+        "  ${DIM}Image:    ${IMAGE_REPO}:${IMAGE_TAG}${NC}" \
+        "  ${DIM}Docs:     github.com/yiyan-yixing/onecode${NC}"
 }
 
 main
