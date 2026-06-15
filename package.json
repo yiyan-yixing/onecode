@@ -11,7 +11,7 @@
     "type": "git",
     "url": "https://github.com/yiyan-yixing/onecode.git"
   },
-  "license": "UNLICENSED",
+  "license": "MIT",
   "dependencies": {
     "node-pty": "^1.0.0",
     "ws": "^8.18.0"

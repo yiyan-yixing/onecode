@@ -2,7 +2,7 @@
 
 [![Version](https://img.shields.io/github/v/release/yiyan-yixing/onecode?include_prereleases)](https://github.com/yiyan-yixing/onecode/releases)
 [![License: MIT](https://img.shields.io/github/license/yiyan-yixing/onecode)](https://github.com/yiyan-yixing/onecode/blob/main/LICENSE)
-[![Docker](https://img.shields.io/docker/pulls/ghcr.io/yiyan-yixing/onecode)](https://github.com/yiyan-yixing/onecode/pkgs/container/onecode)
+[![GHCR](https://img.shields.io/badge/ghcr.io-yiyan--yixing%2Fonecode-blue)](https://github.com/yiyan-yixing/onecode/pkgs/container/onecode)
 
 **一条命令启动 Claude Code，浏览器里写代码。** 容器化、零配置、内置 Agent 角色体系。
 
