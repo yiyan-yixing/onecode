@@ -42,9 +42,21 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libcairo2 \
     && rm -rf /var/lib/apt/lists/*
 
+# GitHub mirror for China network (set to "" to use direct github.com)
+ARG GH_MIRROR=https://gh-proxy.com
+
+# gh_fetch: download from GitHub with mirror fallback
+# Usage: gh_fetch <github_path> <output_path>
+# e.g.  gh_fetch "owner/repo/releases/download/v1/file.tar.gz" - | tar xz
+#       gh_fetch "owner/repo/releases/download/v1/file.zip" /tmp/file.zip
+#
+# Env: GH_MIRROR — mirror prefix (e.g. https://gh-proxy.com), empty = direct
+COPY bin/gh_fetch.sh /usr/local/bin/gh_fetch
+RUN chmod +x /usr/local/bin/gh_fetch
+
 # JetBrains Mono font (sharp, ligature-free terminal font)
 RUN mkdir -p /usr/local/share/fonts/jetbrains-mono \
-    && curl -sL "https://github.com/JetBrains/JetBrainsMono/releases/download/v2.304/JetBrainsMono-2.304.zip" -o /tmp/jb.zip \
+    && gh_fetch "JetBrains/JetBrainsMono/releases/download/v2.304/JetBrainsMono-2.304.zip" /tmp/jb.zip \
     && python3 -c "import zipfile; zipfile.ZipFile('/tmp/jb.zip').extractall('/tmp/jb')" \
     && cp /tmp/jb/fonts/ttf/JetBrainsMono-Regular.ttf /usr/local/share/fonts/jetbrains-mono/ \
     && cp /tmp/jb/fonts/ttf/JetBrainsMono-Bold.ttf /usr/local/share/fonts/jetbrains-mono/ \
@@ -68,7 +80,7 @@ RUN npm install -g @anthropic-ai/claude-code@2.1.177 \
 
 # filebrowser - Web-based file manager
 RUN ARCH=$(dpkg --print-architecture) \
-    && curl -sL "https://github.com/filebrowser/filebrowser/releases/download/v2.63.5/linux-${ARCH}-filebrowser.tar.gz" \
+    && gh_fetch "filebrowser/filebrowser/releases/download/v2.63.5/linux-${ARCH}-filebrowser.tar.gz" - \
     | tar xz -C /usr/local/bin \
     && chmod +x /usr/local/bin/filebrowser \
     && [ "$(stat -c%s /usr/local/bin/filebrowser)" -gt 1000 ]
@@ -76,8 +88,7 @@ RUN ARCH=$(dpkg --print-architecture) \
 # code-server - Web-based VS Code (accessible via /vscode/ route)
 RUN CODE_SERVER_VERSION="4.121.0" \
     && ARCH=$(dpkg --print-architecture) \
-    && curl -sL "https://github.com/coder/code-server/releases/download/v${CODE_SERVER_VERSION}/code-server-${CODE_SERVER_VERSION}-linux-${ARCH}.tar.gz" \
-       -o /tmp/code-server.tar.gz \
+    && gh_fetch "coder/code-server/releases/download/v${CODE_SERVER_VERSION}/code-server-${CODE_SERVER_VERSION}-linux-${ARCH}.tar.gz" /tmp/code-server.tar.gz \
     && tar xzf /tmp/code-server.tar.gz -C /usr/local/lib/ \
     && ln -sf /usr/local/lib/code-server-*/bin/code-server /usr/local/bin/code-server \
     && rm -f /tmp/code-server.tar.gz \

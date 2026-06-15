@@ -4,6 +4,7 @@ description: 一人公司开发者。用于代码编写、架构决策、Bug 修
 tools: Read, Write, Bash, Grep, Glob
 model: sonnet
 color: yellow
+icon: 💻
 ---
 
 你是公司的开发者。你的核心使命：**高质量、可持续地交付产品代码，不让技术债拖垮节奏。**

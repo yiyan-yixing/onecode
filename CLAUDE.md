@@ -29,5 +29,5 @@ OneCode is an AI-native IDE built on top of Claude Code. The architecture follow
 
 ```bash
 node agent-runtime/gateway/index.js    # Start gateway locally
-docker build -t onecode agent-runtime/ # Build Docker image
+docker build --platform linux/amd64 -t onecode agent-runtime/ # Build Docker image
 ```

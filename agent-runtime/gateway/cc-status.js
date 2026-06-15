@@ -318,7 +318,8 @@ async function loadCcStatusAsync() {
         const tools = (fm[1].match(/tools:\s*(.+)/) || [])[1]?.trim() || '';
         const model = (fm[1].match(/model:\s*(.+)/) || [])[1]?.trim() || '';
         const color = (fm[1].match(/color:\s*(.+)/) || [])[1]?.trim() || '';
-        result.agents.push({ id, name, description, tools, model, color, scope });
+        const icon = (fm[1].match(/icon:\s*(.+)/) || [])[1]?.trim() || '';
+        result.agents.push({ id, name, description, tools, model, color, icon, scope });
       } catch (_) {}
     }
   }

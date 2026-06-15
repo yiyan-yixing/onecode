@@ -316,6 +316,7 @@ description: 一人公司开发者。用于代码编写、架构决策、Bug 修
 tools: Read, Write, Bash, Grep, Glob
 model: sonnet
 color: yellow
+icon: 💻
 ---
 
 （Agent 的系统提示词正文...）
@@ -328,6 +329,7 @@ color: yellow
 | `tools` | 可用工具列表 | `Read, Write, Bash` |
 | `model` | 使用的模型 | `sonnet` |
 | `color` | UI 颜色（支持颜色名或 hex） | `yellow` / `#10B981` |
+| `icon` | 角色图标 emoji（可选，未设置时显示首字母） | `💻` |
 
 文件名（去 `.md`）即为 `@id`，如 `dev.md` → `@dev`。
 

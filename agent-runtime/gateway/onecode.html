@@ -132,6 +132,7 @@ html{background:linear-gradient(160deg,#0a0c14 0%,#060a16 50%,#0a0e1a 100%)}
 .ai:hover{background:var(--sf2)}
 .ai.act{background:var(--ac-d);border-left-color:var(--ac)}
 .ai .aicon{width:18px;height:18px;display:flex;align-items:center;justify-content:center;font-size:12px;border-radius:6px;flex-shrink:0;transition:transform .15s}
+.ai .aicon.aicon-letter{font-size:11px;font-weight:700;font-family:system-ui,-apple-system,sans-serif}
 .ai:hover .aicon{transform:scale(1.15)}
 .ai .aname{flex:1;font-size:11px;font-weight:600;color:var(--tx2);min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .ai .amission{font-size:9px;color:var(--tx3);display:none;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -195,6 +196,7 @@ html{background:linear-gradient(160deg,#0a0c14 0%,#060a16 50%,#0a0e1a 100%)}
 .mp-item{display:flex;align-items:center;gap:6px;padding:5px 12px;cursor:pointer;transition:background .1s}
 .mp-item:hover,.mp-item.sel{background:var(--ac-d)}
 .mp-item .mp-icon{width:18px;height:18px;display:flex;align-items:center;justify-content:center;font-size:12px;border-radius:6px;flex-shrink:0}
+.mp-item .mp-icon.mp-icon-letter{font-size:11px;font-weight:700;font-family:system-ui,-apple-system,sans-serif}
 .mp-item .mp-name{font-size:11px;font-weight:600;color:var(--tx2)}
 .mp-item .mp-id{font-size:9px;color:var(--tx3);margin-left:4px}
 .mp-item .mp-mission{font-size:9px;color:var(--tx3);margin-left:auto}
@@ -392,7 +394,8 @@ if(!agentRoles.length){
 var h='';
 agentRoles.forEach(function(r){
   var cls=activeAgent===r.id?' act':'';
-  h+='<div class="ai'+cls+'" data-agent="'+r.id+'"><span class="aicon" style="background:'+r.color+'18;color:'+r.color+'">🤖</span><span class="aname">'+esc(r.name)+'</span><span class="amission">'+esc(r.description)+'</span></div>';
+  var ic=r.icon?'<span class="aicon" style="background:'+r.color+'18;color:'+r.color+'">'+esc(r.icon)+'</span>':'<span class="aicon aicon-letter" style="background:'+r.color+'18;color:'+r.color+'">'+esc(r.name.charAt(0).toUpperCase())+'</span>';
+  h+='<div class="ai'+cls+'" data-agent="'+r.id+'">'+ic+'<span class="aname">'+esc(r.name)+'</span><span class="amission">'+esc(r.description)+'</span></div>';
 });
 sec.innerHTML=h;
 sec.querySelectorAll('.ai').forEach(function(el){
@@ -431,7 +434,8 @@ var matches=agentRoles.filter(function(r){
 if(!matches.length){hideMention();return;}
 var h='';
 matches.forEach(function(r,i){
-  h+='<div class="mp-item'+(i===mentionIdx?' sel':'')+'" data-agent="'+r.id+'"><span class="mp-icon" style="background:'+r.color+'18;color:'+r.color+'">🤖</span><span class="mp-name">'+esc(r.name)+'</span><span class="mp-id">@'+r.id+'</span><span class="mp-mission">'+esc(r.description)+'</span></div>';
+  var ic=r.icon?'<span class="mp-icon" style="background:'+r.color+'18;color:'+r.color+'">'+esc(r.icon)+'</span>':'<span class="mp-icon mp-icon-letter" style="background:'+r.color+'18;color:'+r.color+'">'+esc(r.name.charAt(0).toUpperCase())+'</span>';
+  h+='<div class="mp-item'+(i===mentionIdx?' sel':'')+'" data-agent="'+r.id+'">'+ic+'<span class="mp-name">'+esc(r.name)+'</span><span class="mp-id">@'+r.id+'</span><span class="mp-mission">'+esc(r.description)+'</span></div>';
 });
 mentionPop.innerHTML=h;
 mentionPop.classList.add('on');
@@ -483,7 +487,7 @@ function renderCcBadges(){
       agentRoles=d.agents.map(function(a){
         var c=COLOR_MAP[a.color]||a.color||'#6B7280';
         if(c.charAt(0)!=='#')c='#6B7280';
-        return{id:a.id,name:a.name,description:a.description,color:c};
+        return{id:a.id,name:a.name,description:a.description,color:c,icon:a.icon||''};
       });
     }else{
       agentRoles=[];
