@@ -87,7 +87,7 @@ curl -fsSL -H "Accept: application/vnd.github.v3.raw" \
 ### Docker 直接运行
 
 ```bash
-docker build -t onecode agent-runtime/
+docker build --platform linux/amd64 -t onecode agent-runtime/
 
 # claude-code 后端（默认，首次启动需等待 ~30s 安装）
 docker run -it --rm -e API_KEY=sk-xxx -p 7681:7681 -p 8000:8000 -v $(pwd):/workspace onecode remote
