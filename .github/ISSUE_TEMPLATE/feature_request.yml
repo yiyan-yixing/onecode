@@ -1,0 +1,50 @@
+name: 💡 Feature Request
+description: 提出一个功能建议
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        感谢你的建议！请描述你的想法。
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: 你遇到了什么问题？
+      description: 这个功能要解决什么痛点？（不是"想要什么功能"，而是"遇到了什么问题"）
+      placeholder: "例如：在手机上无法切换 Agent，每次都要打字输入 @角色名"
+    validations:
+      required: true
+
+  - type: textarea
+    id: solution
+    attributes:
+      label: 你期望的解决方案？
+      description: 你觉得怎么解决最好？
+      placeholder: "例如：Agent 面板可以点击切换，不需要手动输入"
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: 考虑过的替代方案？
+      description: 你还想过什么其他方式？
+
+  - type: dropdown
+    id: priority
+    attributes:
+      label: 优先级
+      description: 你觉得这个功能有多重要？
+      options:
+        - 有了更好（锦上添花）
+        - 挺需要的（影响体验）
+        - 必须要有（影响使用）
+    validations:
+      required: true
+
+  - type: textarea
+    id: additional
+    attributes:
+      label: 补充信息
+      description: 其他相关上下文、截图、参考项目等
