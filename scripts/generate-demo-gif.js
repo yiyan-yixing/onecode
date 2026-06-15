@@ -53,6 +53,32 @@ class GIFEncoder {
     return { palette, indexMap, colorCount: Math.max(2, colorIdx) };
   }
 
+  // Quantize using an existing palette (nearest-neighbor match)
+  quantizeWithPalette(frame, paletteInfo) {
+    const { palette } = paletteInfo;
+    const indexMap = new Uint8Array(this.width * this.height);
+    const pixels = this.width * this.height;
+
+    for (let i = 0; i < pixels; i++) {
+      const r = frame[i * 4];
+      const g = frame[i * 4 + 1];
+      const b = frame[i * 4 + 2];
+      let bestIdx = 0, bestDist = Infinity;
+      for (let c = 0; c < 256; c++) {
+        const pr = palette[c * 3];
+        const pg = palette[c * 3 + 1];
+        const pb = palette[c * 3 + 2];
+        const dr = r - pr, dg = g - pg, db = b - pb;
+        const dist = dr*dr + dg*dg + db*db;
+        if (dist < bestDist) { bestDist = dist; bestIdx = c; }
+        if (dist === 0) break; // exact match
+      }
+      indexMap[i] = bestIdx;
+    }
+
+    return indexMap;
+  }
+
   lzwEncode(indices, minCodeSize) {
     const clearCode = 1 << minCodeSize;
     const eoiCode = clearCode + 1;
@@ -95,20 +121,32 @@ class GIFEncoder {
 
   encode() {
     const bufs = [];
+    // 1. Header
     bufs.push(Buffer.from('GIF89a'));
+
+    // 2. Logical Screen Descriptor
     const lsd = Buffer.alloc(7);
     lsd.writeUInt16LE(this.width, 0); lsd.writeUInt16LE(this.height, 2);
-    lsd[4] = 0x80 | 0x70; lsd[5] = 0; lsd[6] = 0;
+    // Packed byte: GCT flag=1, color resolution=7(8bits), sort=0, GCT size=7 (256 colors = 2^(7+1))
+    lsd[4] = 0x80 | (7 << 4) | 7; // = 0xF7
+    lsd[5] = 0; // background color index
+    lsd[6] = 0; // pixel aspect ratio
     bufs.push(lsd);
+
+    // 3. Global Color Table (MUST come before NETSCAPE extension)
+    const first = this.quantize(this.frames[0]);
+    bufs.push(first.palette); // 256 * 3 = 768 bytes
+
+    // 4. NETSCAPE extension (for animation loop)
     bufs.push(Buffer.from([0x21, 0xff, 0x0b]));
     bufs.push(Buffer.from('NETSCAPE2.0'));
     bufs.push(Buffer.from([0x03, 0x01]));
     const loopBuf = Buffer.alloc(2); loopBuf.writeUInt16LE(0, 0);
     bufs.push(loopBuf); bufs.push(Buffer.from([0x00]));
-    const first = this.quantize(this.frames[0]);
-    bufs.push(first.palette);
+
+    // 5. Frames — all use the global palette (first frame's quantization)
     for (let f = 0; f < this.frames.length; f++) {
-      const quant = f === 0 ? first : this.quantize(this.frames[f]);
+      const indexMap = this.quantizeWithPalette(this.frames[f], first);
       const gce = Buffer.from([0x21, 0xf9, 0x04, 0x00, 0x00, Math.round(this.delay / 10), 0x00, 0x00]);
       bufs.push(gce);
       const img = Buffer.alloc(10);
@@ -116,7 +154,7 @@ class GIFEncoder {
       img.writeUInt16LE(this.width, 5); img.writeUInt16LE(this.height, 7); img[9] = 0x00;
       bufs.push(img);
       bufs.push(Buffer.from([8]));
-      const compressed = this.lzwEncode(quant.indexMap, 8);
+      const compressed = this.lzwEncode(indexMap, 8);
       let offset = 0;
       while (offset < compressed.length) {
         const cs = Math.min(255, compressed.length - offset);
