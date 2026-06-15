@@ -3,9 +3,8 @@ set -euo pipefail
 
 IMAGE_REPO="ghcr.io/yiyan-yixing/onecode"
 IMAGE="${AGENT_RUNTIME_IMAGE:-${IMAGE_REPO}:latest}"
-PLATFORM="${AGENT_RUNTIME_PLATFORM:-linux/$(uname -m)}"
 IMAGE_TAG=""
-OC_VERSION="0.3.5"
+OC_VERSION="0.4.0"
 REPO_OWNER="yiyan-yixing"
 REPO_NAME="onecode"
 REPO_BRANCH="main"
@@ -27,43 +26,157 @@ github_fetch() {
 OC_HOME="${OC_HOME:-$HOME/.onecode}"
 OC_CONFIG="$OC_HOME/settings.json"
 
-_env_api_key="${API_KEY:-}"
-_env_base_url="${API_BASE_URL:-}"
-_env_model="${MODEL:-}"
+# ── jq dependency check ──────────────────────────────────────────
+require_jq() {
+    if ! command -v jq &>/dev/null; then
+        echo "Error: jq is required but not installed." >&2
+        echo "  Install: brew install jq  (macOS)" >&2
+        echo "           apt install jq   (Ubuntu/Debian)" >&2
+        exit 1
+    fi
+}
 
-load_config() {
+# ── Provider defaults (single source of truth) ───────────────────
+PROVIDER_DEFAULTS_anthropic_api_base_url="https://api.anthropic.com"
+PROVIDER_DEFAULTS_anthropic_model="claude-sonnet-4-6"
+PROVIDER_DEFAULTS_openai_compatible_api_base_url=""
+PROVIDER_DEFAULTS_openai_compatible_model="gpt-4o"
+
+cfg_default() {
+    local provider="${1:-anthropic}" key="$2"
+    local var="PROVIDER_DEFAULTS_${provider}_${key}"
+    if [ -n "${!var:-}" ]; then
+        echo "${!var}"
+    else
+        var="PROVIDER_DEFAULTS_anthropic_${key}"
+        echo "${!var:-}"
+    fi
+}
+
+# ── v1 → v2 migration ────────────────────────────────────────────
+cfg_migrate_v1_to_v2() {
     [ -f "$OC_CONFIG" ] || return 0
-    while IFS=':' read -r key value; do
-        value="${value# \"}"
-        value="${value%\"*}"
-        value="${value%,}"
-        case "$key" in
-            *'"API_KEY"')      API_KEY="$value" ;;
-            *'"API_BASE_URL"') API_BASE_URL="$value" ;;
-            *'"MODEL"')        MODEL="$value" ;;
-        esac
-    done < "$OC_CONFIG"
+    # Already v2+?
+    local ver
+    ver=$(jq -r '.["$version"] // 0' "$OC_CONFIG" 2>/dev/null) || return 0
+    [ "$ver" -ge 2 ] 2>/dev/null && return 0
+
+    # Read v1 fields (uppercase keys)
+    local old_key old_url old_model
+    old_key=$(jq -r '.API_KEY // empty' "$OC_CONFIG" 2>/dev/null) || old_key=""
+    old_url=$(jq -r '.API_BASE_URL // empty' "$OC_CONFIG" 2>/dev/null) || old_url=""
+    old_model=$(jq -r '.MODEL // empty' "$OC_CONFIG" 2>/dev/null) || old_model=""
+
+    # Infer provider from URL
+    local inferred="anthropic"
+    case "$old_url" in
+        https://api.anthropic.com*|'') inferred="anthropic" ;;
+        *) inferred="openai_compatible" ;;
+    esac
+
+    # Write v2 format
+    local tmp="${OC_CONFIG}.tmp.$$"
+    jq -n \
+      --arg v "2" \
+      --arg p "$inferred" \
+      --arg ak "${old_key:-}" \
+      --arg au "${old_url:-}" \
+      --arg m "${old_model:-}" \
+    '{"$version":$v,"provider":$p,"api_key":$ak,"api_base_url":$au,"model":$m}' \
+    > "$tmp" && mv "$tmp" "$OC_CONFIG" && chmod 600 "$OC_CONFIG"
+
+    echo "Config migrated to v2 (provider: $inferred)"
 }
 
-save_config() {
+# ── JSON I/O with jq ─────────────────────────────────────────────
+cfg_get() {
+    local key="$1"
+    [ -f "$OC_CONFIG" ] || return 1
+    jq -r --arg k "$key" '.[$k] // empty' "$OC_CONFIG" 2>/dev/null
+}
+
+cfg_set() {
+    local key="$1" val="$2"
+    local tmp="${OC_CONFIG}.tmp.$$"
+    require_jq
+    [ -f "$OC_CONFIG" ] || { mkdir -p "$OC_HOME"; echo '{}' > "$OC_CONFIG"; chmod 600 "$OC_CONFIG"; }
+    # Validate before writing
+    local err
+    err=$(cfg_validate_key "$key" "$val" 2>&1) || { echo "$err" >&2; return 1; }
+    # Determine how to pass the value to jq
+    # - true/false/integer → --argjson (JSON literal)
+    # - everything else → --arg (safe string, jq handles quoting)
+    if [ "$val" = "true" ] || [ "$val" = "false" ]; then
+        jq --arg k "$key" --argjson v "$val" '.[$k] = $v' "$OC_CONFIG" > "$tmp" 2>/dev/null
+    elif [[ "$val" =~ ^[0-9]+$ ]] && [ ${#val} -lt 10 ]; then
+        jq --arg k "$key" --argjson v "$val" '.[$k] = $v' "$OC_CONFIG" > "$tmp" 2>/dev/null
+    else
+        jq --arg k "$key" --arg v "$val" '.[$k] = $v' "$OC_CONFIG" > "$tmp" 2>/dev/null
+    fi
+    if [ -s "$tmp" ]; then
+        mv "$tmp" "$OC_CONFIG" && chmod 600 "$OC_CONFIG"
+    else
+        rm -f "$tmp"
+        echo "Error: failed to update $key in $OC_CONFIG" >&2
+        return 1
+    fi
+}
+
+cfg_del() {
+    local key="$1"
+    [ -f "$OC_CONFIG" ] || return 0
+    local tmp="${OC_CONFIG}.tmp.$$"
+    jq --arg k "$key" 'del(.[$k])' "$OC_CONFIG" > "$tmp" 2>/dev/null \
+      && mv "$tmp" "$OC_CONFIG" && chmod 600 "$OC_CONFIG"
+}
+
+cfg_load() {
+    [ -f "$OC_CONFIG" ] || return 0
+    require_jq
+    # Auto-migrate v1 → v2
+    cfg_migrate_v1_to_v2
+    # Load all keys (skip $version metadata) into shell variables
+    eval "$(jq -r '
+        to_entries |
+        map(select(.key | startswith("$") | not)) |
+        map("\(.key)=\(.value | @sh)") |
+        .[]
+    ' "$OC_CONFIG" 2>/dev/null)" || true
+}
+
+cfg_save_all() {
+    require_jq
     mkdir -p "$OC_HOME"
-    cat > "$OC_CONFIG" <<EOF
-{
-  "API_KEY": "$API_KEY",
-  "API_BASE_URL": "$API_BASE_URL",
-  "MODEL": "$MODEL"
-}
-EOF
-    chmod 600 "$OC_CONFIG"
+    local tmp="${OC_CONFIG}.tmp.$$"
+    jq -n \
+      --arg v "2" \
+      --arg provider "${provider:-anthropic}" \
+      --arg api_key "${api_key:-}" \
+      --arg api_base_url "${api_base_url:-}" \
+      --arg model "${model:-}" \
+      --arg docker_platform "${docker_platform:-linux/amd64}" \
+      --arg image_tag "${image_tag:-latest}" \
+      --arg gh_mirror "${gh_mirror:-https://gh-proxy.com}" \
+      --argjson gateway_port "${gateway_port:-7681}" \
+      --argjson app_port "${app_port:-8000}" \
+      --argjson ssh_port "${ssh_port:-8222}" \
+      --arg term_token "${term_token:-}" \
+      --argjson gateway_https "${gateway_https:-false}" \
+    '{"$version":$v,$provider,$api_key,$api_base_url,$model,$docker_platform,$image_tag,$gh_mirror,$gateway_port,$app_port,$ssh_port,$term_token,$gateway_https}' \
+    > "$tmp" && mv "$tmp" "$OC_CONFIG" && chmod 600 "$OC_CONFIG"
 }
 
-load_config
-[ -n "$_env_api_key" ]  && API_KEY="$_env_api_key"      || true
-[ -n "$_env_base_url" ] && API_BASE_URL="$_env_base_url" || true
-[ -n "$_env_model" ]    && MODEL="$_env_model"           || true
+# ── Key alias: v1 uppercase → v2 lowercase ───────────────────────
+cfg_normalize_key() {
+    case "$1" in
+        API_KEY)      echo "api_key" ;;
+        API_BASE_URL) echo "api_base_url" ;;
+        MODEL)        echo "model" ;;
+        *)            echo "$1" ;;
+    esac
+}
 
-# ── First-run setup & config resolution ─────────────────────────────
-# Known placeholder keys that indicate the user hasn't set a real key yet
+# ── Config validation ─────────────────────────────────────────────
 is_placeholder_key() {
     case "${1:-}" in
         ""|sk-test-key|sk-placeholder|sk-your-api-key|sk-xxx|sk-replace-me) return 0 ;;
@@ -71,17 +184,77 @@ is_placeholder_key() {
     return 1
 }
 
+cfg_validate_key() {
+    local key="$1" val="$2"
+    case "$key" in
+        api_key)
+            if [ -z "$val" ]; then
+                echo "error: api_key cannot be empty"
+                return 1
+            fi
+            if is_placeholder_key "$val"; then
+                echo "error: api_key appears to be a placeholder ($val)"
+                return 1
+            fi
+            ;;
+        api_base_url)
+            if [ -n "$val" ] && ! [[ "$val" =~ ^https?://.+ ]]; then
+                echo "error: api_base_url must be a valid URL (http:// or https://)"
+                return 1
+            fi
+            ;;
+        docker_platform)
+            if [ -n "$val" ] && [ "$val" != "linux/amd64" ] && [ "$val" != "linux/arm64" ]; then
+                echo "error: docker_platform must be linux/amd64 or linux/arm64"
+                return 1
+            fi
+            ;;
+        gateway_port|app_port|ssh_port)
+            if [ -n "$val" ]; then
+                if ! [[ "$val" =~ ^[0-9]+$ ]] || [ "$val" -lt 1 ] || [ "$val" -gt 65535 ]; then
+                    echo "error: $key must be between 1 and 65535"
+                    return 1
+                fi
+            fi
+            ;;
+        gateway_https)
+            if [ "$val" != "true" ] && [ "$val" != "false" ]; then
+                echo "error: gateway_https must be true or false"
+                return 1
+            fi
+            ;;
+    esac
+    return 0
+}
+
+# ── Load config + env var overrides ──────────────────────────────
+# Snapshot env vars BEFORE loading from file (env > file > default)
+_env_api_key="${API_KEY:-}"
+_env_base_url="${API_BASE_URL:-}"
+_env_model="${MODEL:-}"
+_env_platform="${AGENT_RUNTIME_PLATFORM:-}"
+
+cfg_load
+
+# Env var overrides (v1 uppercase names for backward compat)
+[ -n "$_env_api_key" ]   && api_key="$_env_api_key"      || true
+[ -n "$_env_base_url" ]  && api_base_url="$_env_base_url" || true
+[ -n "$_env_model" ]     && model="$_env_model"           || true
+[ -n "$_env_platform" ]  && docker_platform="$_env_platform" || true
+
+# Fill in provider defaults for missing fields
+[ -z "${api_base_url:-}" ] && api_base_url="$(cfg_default "${provider:-anthropic}" api_base_url)" || true
+[ -z "${model:-}" ]        && model="$(cfg_default "${provider:-anthropic}" model)" || true
+
 resolve_config() {
-    # If all three are set with real values, we're good
-    if [ -n "${API_KEY:-}" ] && ! is_placeholder_key "$API_KEY" \
-       && [ -n "${API_BASE_URL:-}" ] && [ -n "${MODEL:-}" ]; then
-        export API_KEY API_BASE_URL MODEL
+    # If api_key is set with a real value, we're good
+    if [ -n "${api_key:-}" ] && ! is_placeholder_key "$api_key"; then
+        export API_KEY="${api_key}" API_BASE_URL="${api_base_url:-}" MODEL="${model:-}"
         return 0
     fi
 
-    # First run or placeholder key: interactive setup
-    if [ ! -f "$OC_CONFIG" ] || is_placeholder_key "${API_KEY:-}"; then
-        cat <<'WELCOME'
+    # First run or placeholder key: interactive wizard
+    cat <<'WELCOME'
 
   ╔═══════════════════════════════════════════════╗
   ║          Welcome to OneCode! 🚀               ║
@@ -91,44 +264,101 @@ resolve_config() {
   ╚═══════════════════════════════════════════════╝
 
 WELCOME
-        if is_placeholder_key "${API_KEY:-}"; then
-            echo "⚠  Current API key appears to be a placeholder. Please enter a real key."
-            echo ""
-        fi
-    fi
-
-    # API_BASE_URL
-    if [ -z "${API_BASE_URL:-}" ]; then
-        echo "API Base URL (press Enter for Anthropic: https://api.anthropic.com)"
-        read -rp "  API_BASE_URL: " API_BASE_URL
-        API_BASE_URL="${API_BASE_URL:-https://api.anthropic.com}"
+    if is_placeholder_key "${api_key:-}"; then
+        echo "⚠  Current API key appears to be a placeholder. Please enter a real key."
         echo ""
     fi
 
-    # API_KEY
-    if [ -z "${API_KEY:-}" ]; then
-        read -rsp "API Key (input hidden): " API_KEY
+    # Step 1: Provider selection
+    local chosen_provider="${provider:-}"
+    if [ -z "$chosen_provider" ]; then
+        echo "  Step 1: Choose your API provider"
+        echo ""
+        echo "    1) Anthropic         (Claude models)"
+        echo "    2) OpenAI Compatible (any OpenAI-format API)"
+        echo ""
+        read -rp "  Select [1-2]: " provider_choice
+        case "$provider_choice" in
+            2) chosen_provider="openai_compatible" ;;
+            *) chosen_provider="anthropic" ;;
+        esac
+        echo ""
+    fi
+    provider="$chosen_provider"
+
+    # Step 2: API Base URL (only for openai_compatible)
+    if [ -z "${api_base_url:-}" ] && [ "$provider" = "openai_compatible" ]; then
+        echo "  Step 2: API Base URL"
+        echo "  Example: https://api.openai.com/v1  or  https://your-gateway.com/v1"
+        read -rp "  API Base URL: " api_base_url
+        echo ""
+    elif [ -z "${api_base_url:-}" ]; then
+        api_base_url="$(cfg_default "$provider" api_base_url)"
+    fi
+
+    # Step 3: API Key
+    local key_step
+    [ "$provider" = "openai_compatible" ] && key_step="3" || key_step="2"
+    if [ -z "${api_key:-}" ] || is_placeholder_key "${api_key:-}"; then
+        echo "  Step ${key_step}: API Key"
+        if [ "$provider" = "anthropic" ]; then
+            echo "  Get your key at: https://console.anthropic.com/"
+        fi
+        read -rsp "  API Key (input hidden): " api_key
         echo
-        if [ -z "$API_KEY" ]; then
-            echo "Error: API_KEY is required" >&2
+        if [ -z "$api_key" ]; then
+            echo "Error: API key is required" >&2
             exit 1
         fi
         echo ""
     fi
 
-    # MODEL
-    if [ -z "${MODEL:-}" ]; then
-        echo "Model name (press Enter for claude-sonnet-4-6)"
-        read -rp "  MODEL: " MODEL
-        MODEL="${MODEL:-claude-sonnet-4-6}"
+    # Step 4: Model
+    local model_step
+    [ "$provider" = "openai_compatible" ] && model_step="4" || model_step="3"
+    local default_model
+    default_model="$(cfg_default "$provider" model)"
+    if [ -z "${model:-}" ]; then
+        echo "  Step ${model_step}: Model"
+        echo "  Press Enter for ${default_model}, or type a model name."
+        read -rp "  Model [${default_model}]: " model
+        model="${model:-$default_model}"
         echo ""
     fi
 
-    save_config
-    echo "✓ Config saved to ~/.onecode/settings.json"
+    # Step 5: Docker platform (only prompt on Apple Silicon)
+    if [ -z "${docker_platform:-}" ]; then
+        docker_platform="linux/amd64"
+        if [ "$(uname -s)" = "Darwin" ] && [ "$(uname -m)" = "arm64" ]; then
+            local plat_step
+            [ "$provider" = "openai_compatible" ] && plat_step="5" || plat_step="4"
+            echo "  Step ${plat_step}: Docker platform"
+            echo "  Detected: macOS arm64 (Apple Silicon)"
+            read -rp "  Docker platform [linux/amd64]: " docker_platform
+            docker_platform="${docker_platform:-linux/amd64}"
+            echo ""
+        fi
+    fi
+
+    # Summary
+    echo "  ─────────────────────────────────────"
+    echo "  Configuration summary:"
+    echo "    Provider:        ${provider}"
+    echo "    API Base URL:    ${api_base_url}"
+    echo "    Model:           ${model}"
+    echo "    Docker Platform: ${docker_platform:-linux/amd64}"
+    echo "  ─────────────────────────────────────"
     echo ""
 
-    export API_KEY API_BASE_URL MODEL
+    cfg_save_all
+    echo "  ✓ Config saved to ~/.onecode/settings.json"
+    echo ""
+    echo "  Quick start:"
+    echo "    oc              # interactive Claude CLI"
+    echo "    oc remote       # web terminal at http://localhost:7681"
+    echo ""
+
+    export API_KEY="$api_key" API_BASE_URL="${api_base_url:-}" MODEL="${model:-}"
 }
 
 # ── Docker common args ────────────────────────────────────────────
@@ -140,13 +370,13 @@ build_docker_args() {
     local dir="${WORKDIR:-$(pwd)}"
     local oc_name="${CONTAINER_NAME:-$(basename "$(pwd)")}"
     args=(
-        --platform "$PLATFORM"
+        --platform "${docker_platform:-linux/amd64}"
         --name "$name"
         -v "${dir}":/workspace
         -w /workspace
-        -e "API_BASE_URL=$API_BASE_URL"
-        -e "API_KEY=$API_KEY"
-        -e "MODEL=$MODEL"
+        -e "API_BASE_URL=${api_base_url:-}"
+        -e "API_KEY=${api_key:-}"
+        -e "MODEL=${model:-}"
         -e "OC_NAME=$oc_name"
     )
     # .ssh mounted read-only by default (for git)
@@ -183,7 +413,7 @@ Commands:
   stop      Stop and remove a container
   update    Pull latest image and optionally restart containers
   ls        List oc containers and image
-  config    Show or update configuration (try: oc config set)
+  config    Show or update configuration (try: oc config list)
   help      Show help (this message, or help for a specific command)
 
 Global Options:
@@ -402,23 +632,46 @@ EOF
             cat <<EOF
 oc config — Show or update saved configuration
 
-Usage: oc config [set KEY=VALUE ...]
+Usage: oc config [command] [args]
 
-Displays the configuration stored in ~/.onecode/settings.json.
-The API_KEY is masked for security.
-
-With 'set', updates one or more config values interactively or directly.
+Commands:
+  (none)            Show all settings (api_key masked)
+  get <key>         Get a single key's effective value (shows source)
+  set <key>=<val>   Set one or more keys (supports v1 names: API_KEY, MODEL)
+  set               Interactive setup wizard
+  list              Show all keys, effective values, and sources
+  reset <key>       Reset a key to its default value
+  reset --all       Reset everything to defaults (keeps api_key)
+  path              Print the config file path
+  validate          Validate all values, report problems
 
 Configuration file: ~/.onecode/settings.json (permissions: 600)
-Contains: API_KEY, API_BASE_URL, MODEL
 
-Priority: Environment variables > Config file > Defaults
+Keys (v2):
+  provider          API provider (anthropic, openai_compatible)
+  api_key           API authentication key
+  api_base_url      API endpoint URL
+  model             Default model name
+  docker_platform   Docker platform (linux/amd64, linux/arm64)
+  image_tag         Image tag (default: latest)
+  gh_mirror         GitHub mirror URL (empty = direct)
+  gateway_port      Web terminal port (default: 7681)
+  app_port          App service port (default: 8000)
+  ssh_port          SSH port (default: 8222)
+  term_token        Terminal auth token
+  gateway_https     Enable HTTPS (true/false)
+
+Priority: Environment variables > Config file > Provider defaults > Hardcoded
 
 Examples:
   oc config                           # show current config
-  oc config set                       # interactive setup (re-enter all)
-  oc config set API_KEY=sk-ant-xxx    # set API key directly
-  oc config set MODEL=claude-sonnet-4-6 API_BASE_URL=https://api.anthropic.com
+  oc config list                      # show all keys with sources
+  oc config get model                 # show effective model value
+  oc config set api_key=sk-ant-xxx    # set API key directly
+  oc config set API_KEY=sk-xxx        # v1 alias also works
+  oc config set MODEL=gpt-4o api_base_url=https://api.openai.com/v1
+  oc config validate                  # check for problems
+  oc config reset model               # reset model to default
 EOF
             ;;
         help)
@@ -516,8 +769,10 @@ cmd_run() {
 cmd_remote() {
     resolve_config
     build_docker_args
-    local p="${PORT:-7681}"
-    local ap="${APP_PORT:-8000}"
+    # Port priority: CLI flag (-p) > settings.json > default
+    local p="${PORT:-${gateway_port:-7681}}"
+    local ap="${APP_PORT:-${app_port:-8000}}"
+    local sp="${SSH_PORT:-${ssh_port:-8222}}"
     args+=(
         -d
         -p "${p}:7681"
@@ -528,7 +783,7 @@ cmd_remote() {
     [ -n "${TTYD_TOKEN:-}" ] && args+=(-e "TTYD_TOKEN=$TTYD_TOKEN")
     [ -n "${GATEWAY_HTTPS:-}" ] && args+=(-e "GATEWAY_HTTPS=$GATEWAY_HTTPS")
     # Label the SSH port so cmd_stop can find the right socat process
-    args+=(--label "oc.ssh_port=${SSH_PORT}")
+    args+=(--label "oc.ssh_port=${sp}")
     args+=("$IMAGE" remote)
     debug_cmd docker run "${args[@]}"
     # Capture the actual container name from docker run output
@@ -712,59 +967,330 @@ cmd_ls() {
 }
 
 cmd_config() {
-    if [ "${1:-}" = "set" ]; then
-        shift
-        cmd_config_set "$@"
+    local subcmd="${1:-}"
+    case "$subcmd" in
+        set)      shift; cmd_config_set "$@" ;;
+        get)      shift; cmd_config_get "$@" ;;
+        list)     shift; cmd_config_list "$@" ;;
+        reset)    shift; cmd_config_reset "$@" ;;
+        path)     echo "$OC_CONFIG" ;;
+        validate) shift; cmd_config_validate "$@" ;;
+        *)
+            # Default: show masked config
+            if [ -f "$OC_CONFIG" ]; then
+                echo "Config: $OC_CONFIG"
+                jq '.' "$OC_CONFIG" | jq -r '
+                    to_entries |
+                    map(
+                        if .key == "api_key" and (.value | length) > 4
+                        then .key + ": " + "****" + (.value | .[-4:])
+                        elif .key == "api_key"
+                        then .key + ": ****"
+                        elif .key == "term_token" and (.value | length) > 0
+                        then .key + ": ****"
+                        elif .value | type == "boolean"
+                        then .key + ": " + (.value | tostring)
+                        elif .value | type == "number"
+                        then .key + ": " + (.value | tostring)
+                        else .key + ": " + .value
+                        end
+                    ) |
+                    .[]
+                ' 2>/dev/null || cat "$OC_CONFIG"
+            else
+                echo "No config file ($OC_CONFIG)"
+                echo "Run 'oc config set' to configure."
+            fi
+            ;;
+    esac
+}
+
+cmd_config_get() {
+    local key="$1"
+    if [ -z "$key" ]; then
+        echo "Usage: oc config get <key>" >&2
+        echo "  Keys: provider, api_key, api_base_url, model, docker_platform, image_tag, gh_mirror, gateway_port, app_port, ssh_port, term_token, gateway_https" >&2
+        return 1
+    fi
+    key=$(cfg_normalize_key "$key")
+
+    # Resolve effective value with source tracing
+    local env_val="" env_name="" source=""
+
+    # Map v2 keys to env var names
+    case "$key" in
+        api_key)      env_val="${API_KEY:-}";  env_name="API_KEY" ;;
+        api_base_url) env_val="${API_BASE_URL:-}"; env_name="API_BASE_URL" ;;
+        model)        env_val="${MODEL:-}";    env_name="MODEL" ;;
+        docker_platform) env_val="${AGENT_RUNTIME_PLATFORM:-}"; env_name="AGENT_RUNTIME_PLATFORM" ;;
+        gateway_port) env_val="${GATEWAY_PORT:-}"; env_name="GATEWAY_PORT" ;;
+        app_port)     env_val="${APP_PORT:-}"; env_name="APP_PORT" ;;
+        ssh_port)     env_val="${SSH_PORT:-}";  env_name="SSH_PORT" ;;
+        term_token)   env_val="${TTYD_TOKEN:-}"; env_name="TTYD_TOKEN" ;;
+        gateway_https) env_val="${GATEWAY_HTTPS:-}"; env_name="GATEWAY_HTTPS" ;;
+    esac
+
+    if [ -n "$env_val" ]; then
+        # Mask sensitive values in output
+        if [ "$key" = "api_key" ]; then
+            echo "****${env_val: -4}  (from: env var $env_name)"
+        elif [ "$key" = "term_token" ]; then
+            echo "****  (from: env var $env_name)"
+        else
+            echo "$env_val  (from: env var $env_name)"
+        fi
         return
     fi
-    if [ -f "$OC_CONFIG" ]; then
-        echo "Config: $OC_CONFIG"
-        sed 's/\("API_KEY": *"\)[^"]*/\1****/' "$OC_CONFIG"
-    else
-        echo "No config file ($OC_CONFIG)"
+
+    # Try settings.json
+    local file_val
+    file_val=$(cfg_get "$key" 2>/dev/null) || true
+    if [ -n "$file_val" ]; then
+        if [ "$key" = "api_key" ]; then
+            echo "****${file_val: -4}  (from: settings.json)"
+        elif [ "$key" = "term_token" ]; then
+            echo "****  (from: settings.json)"
+        else
+            echo "$file_val  (from: settings.json)"
+        fi
+        return
     fi
+
+    # Try provider default
+    local prov
+    prov=$(cfg_get provider 2>/dev/null) || prov="anthropic"
+    local def_val
+    def_val=$(cfg_default "$prov" "$key" 2>/dev/null) || true
+    if [ -n "$def_val" ]; then
+        echo "$def_val  (from: default, provider=$prov)"
+        return
+    fi
+
+    # Hardcoded defaults
+    case "$key" in
+        docker_platform) echo "linux/amd64  (from: default)" ;;
+        image_tag)       echo "latest  (from: default)" ;;
+        gateway_port)    echo "7681  (from: default)" ;;
+        app_port)        echo "8000  (from: default)" ;;
+        ssh_port)        echo "8222  (from: default)" ;;
+        gateway_https)   echo "false  (from: default)" ;;
+        gh_mirror)       echo "https://gh-proxy.com  (from: default)" ;;
+        provider)        echo "anthropic  (from: default)" ;;
+        *)               echo "(not set)" ;;
+    esac
+}
+
+cmd_config_list() {
+    local keys=(provider api_key api_base_url model docker_platform image_tag gh_mirror gateway_port app_port ssh_port term_token gateway_https)
+    local file_data="{}"
+    [ -f "$OC_CONFIG" ] && file_data=$(cat "$OC_CONFIG")
+
+    printf "%-18s %-30s %s\n" "KEY" "VALUE" "SOURCE"
+    printf "%-18s %-30s %s\n" "---" "-----" "------"
+
+    for key in "${keys[@]}"; do
+        local env_val="" env_name="" val="" source=""
+
+        # Check env var
+        case "$key" in
+            api_key)      env_val="${API_KEY:-}";  env_name="API_KEY" ;;
+            api_base_url) env_val="${API_BASE_URL:-}"; env_name="API_BASE_URL" ;;
+            model)        env_val="${MODEL:-}";    env_name="MODEL" ;;
+            docker_platform) env_val="${AGENT_RUNTIME_PLATFORM:-}"; env_name="AGENT_RUNTIME_PLATFORM" ;;
+            gateway_port) env_val="${GATEWAY_PORT:-}"; env_name="GATEWAY_PORT" ;;
+            app_port)     env_val="${APP_PORT:-}"; env_name="APP_PORT" ;;
+            ssh_port)     env_val="${SSH_PORT:-}";  env_name="SSH_PORT" ;;
+            term_token)   env_val="${TTYD_TOKEN:-}"; env_name="TTYD_TOKEN" ;;
+            gateway_https) env_val="${GATEWAY_HTTPS:-}"; env_name="GATEWAY_HTTPS" ;;
+        esac
+
+        if [ -n "$env_val" ]; then
+            val="$env_val"
+            source="env ($env_name)"
+        else
+            # Check file
+            local file_val
+            file_val=$(echo "$file_data" | jq -r --arg k "$key" '.[$k] // empty' 2>/dev/null) || true
+            if [ -n "$file_val" ]; then
+                val="$file_val"
+                source="settings.json"
+            else
+                # Check provider default
+                local prov
+                prov=$(echo "$file_data" | jq -r '.provider // "anthropic"' 2>/dev/null)
+                local def_val
+                def_val=$(cfg_default "$prov" "$key" 2>/dev/null) || true
+                if [ -n "$def_val" ]; then
+                    val="$def_val"
+                    source="default ($prov)"
+                else
+                    # Hardcoded defaults
+                    case "$key" in
+                        docker_platform) val="linux/amd64"; source="default" ;;
+                        image_tag)       val="latest"; source="default" ;;
+                        gateway_port)    val="7681"; source="default" ;;
+                        app_port)        val="8000"; source="default" ;;
+                        ssh_port)        val="8222"; source="default" ;;
+                        gateway_https)   val="false"; source="default" ;;
+                        gh_mirror)       val="https://gh-proxy.com"; source="default" ;;
+                        provider)        val="anthropic"; source="default" ;;
+                        *)               val="(not set)"; source="" ;;
+                    esac
+                fi
+            fi
+        fi
+
+        # Mask sensitive values
+        case "$key" in
+            api_key)
+                if [ ${#val} -gt 4 ]; then
+                    val="****${val: -4}"
+                elif [ -n "$val" ]; then
+                    val="****"
+                fi
+                ;;
+            term_token)
+                [ -n "$val" ] && val="****"
+                ;;
+        esac
+
+        # Truncate long values for display
+        [ ${#val} -gt 28 ] && val="${val:0:25}..."
+
+        printf "%-18s %-30s %s\n" "$key" "$val" "$source"
+    done
+}
+
+cmd_config_reset() {
+    if [ "${1:-}" = "--all" ]; then
+        # Reset everything except api_key
+        local saved_key
+        saved_key=$(cfg_get api_key 2>/dev/null) || saved_key=""
+        mkdir -p "$OC_HOME"
+        echo '{}' > "$OC_CONFIG"
+        chmod 600 "$OC_CONFIG"
+        [ -n "$saved_key" ] && cfg_set api_key "$saved_key"
+        echo "✓ Config reset to defaults (api_key preserved)"
+        return
+    fi
+
+    local key="$1"
+    if [ -z "$key" ]; then
+        echo "Usage: oc config reset <key>   or   oc config reset --all" >&2
+        return 1
+    fi
+    key=$(cfg_normalize_key "$key")
+    cfg_del "$key"
+    echo "✓ $key reset to default"
+}
+
+cmd_config_validate() {
+    require_jq
+    local has_error=false
+    local keys=(provider api_key api_base_url model docker_platform gateway_port app_port ssh_port gateway_https)
+    local file_data="{}"
+    [ -f "$OC_CONFIG" ] && file_data=$(cat "$OC_CONFIG")
+
+    for key in "${keys[@]}"; do
+        local val
+        val=$(echo "$file_data" | jq -r --arg k "$key" '.[$k] // empty' 2>/dev/null) || true
+        [ -z "$val" ] && continue
+
+        local err
+        err=$(cfg_validate_key "$key" "$val" 2>&1) || true
+        if [ -n "$err" ]; then
+            echo "  FAIL  $key: $err"
+            has_error=true
+        else
+            case "$key" in
+                api_key) echo "  OK    api_key: set (ends ****${val: -4})" ;;
+                *)       echo "  OK    $key: $val" ;;
+            esac
+        fi
+    done
+
+    # Check api_key is set
+    local ak
+    ak=$(echo "$file_data" | jq -r '.api_key // empty' 2>/dev/null) || true
+    if [ -z "$ak" ] || is_placeholder_key "$ak"; then
+        echo "  WARN  api_key: not set or placeholder"
+    fi
+
+    if [ "$has_error" = true ]; then
+        return 1
+    fi
+    echo ""
+    echo "Config is valid."
 }
 
 cmd_config_set() {
     # If key=value args provided, set them directly
     if [ $# -gt 0 ]; then
+        require_jq
         for pair in "$@"; do
             local key="${pair%%=*}"
             local val="${pair#*=}"
-            case "$key" in
-                API_KEY)      API_KEY="$val" ;;
-                API_BASE_URL) API_BASE_URL="$val" ;;
-                MODEL)        MODEL="$val" ;;
-                *)            echo "Unknown key: $key (valid: API_KEY, API_BASE_URL, MODEL)" >&2; return 1 ;;
-            esac
+            key=$(cfg_normalize_key "$key")
+            cfg_set "$key" "$val"
         done
-        save_config
         echo "✓ Config saved to $OC_CONFIG"
         return
     fi
 
-    # Interactive mode: prompt for each field
+    # Interactive mode: guided setup
+    require_jq
+
+    # Show current config
     echo "Current configuration:"
-    if [ -f "$OC_CONFIG" ]; then
-        sed 's/\("API_KEY": *"\)[^"]*/\1****/' "$OC_CONFIG"
+    cmd_config
+    echo ""
+
+    # Provider
+    local cur_provider
+    cur_provider=$(cfg_get provider 2>/dev/null) || cur_provider="anthropic"
+    echo "  1) Anthropic         (Claude models)"
+    echo "  2) OpenAI Compatible (any OpenAI-format API)"
+    read -rp "  Provider [${cur_provider}]: " new_provider
+    if [ -n "$new_provider" ]; then
+        case "$new_provider" in
+            1) provider="anthropic" ;;
+            2) provider="openai_compatible" ;;
+            *) provider="$new_provider" ;;
+        esac
     else
-        echo "  (none)"
+        provider="$cur_provider"
     fi
-    echo ""
-    echo "Press Enter to keep current value, or type a new one."
-    echo ""
 
-    read -rp "API_BASE_URL [${API_BASE_URL:-https://api.anthropic.com}]: " new_url
-    API_BASE_URL="${new_url:-${API_BASE_URL:-https://api.anthropic.com}}"
+    # API Base URL
+    local cur_url
+    cur_url=$(cfg_get api_base_url 2>/dev/null) || cur_url="$(cfg_default "$provider" api_base_url)"
+    read -rp "  API Base URL [${cur_url}]: " new_url
+    api_base_url="${new_url:-$cur_url}"
 
-    read -rsp "API Key (input hidden) [current: ****]: " new_key
+    # API Key
+    read -rsp "  API Key (input hidden) [current: ****]: " new_key
     echo
-    [ -n "$new_key" ] && API_KEY="$new_key"
+    [ -n "$new_key" ] && api_key="$new_key"
 
-    read -rp "MODEL [${MODEL:-claude-sonnet-4-6}]: " new_model
-    MODEL="${new_model:-${MODEL:-claude-sonnet-4-6}}"
+    # Model
+    local cur_model
+    cur_model=$(cfg_get model 2>/dev/null) || cur_model="$(cfg_default "$provider" model)"
+    read -rp "  Model [${cur_model}]: " new_model
+    model="${new_model:-$cur_model}"
 
-    save_config
+    # Docker Platform
+    local cur_platform
+    cur_platform=$(cfg_get docker_platform 2>/dev/null) || cur_platform="linux/amd64"
+    read -rp "  Docker Platform [${cur_platform}]: " new_platform
+    docker_platform="${new_platform:-$cur_platform}"
+
+    # GH Mirror
+    local cur_mirror
+    cur_mirror=$(cfg_get gh_mirror 2>/dev/null) || cur_mirror="https://gh-proxy.com"
+    read -rp "  GitHub Mirror [${cur_mirror}]: " new_mirror
+    gh_mirror="${new_mirror:-$cur_mirror}"
+
+    cfg_save_all
     echo ""
     echo "✓ Config saved to $OC_CONFIG"
 }
@@ -801,8 +1327,8 @@ cmd_update() {
 
     # Pull image
     echo "Pulling $pull_image ..."
-    debug_cmd docker pull --platform "$PLATFORM" "$pull_image"
-    docker pull --platform "$PLATFORM" "$pull_image"
+    debug_cmd docker pull --platform "${docker_platform:-linux/amd64}" "$pull_image"
+    docker pull --platform "${docker_platform:-linux/amd64}" "$pull_image"
 
     # Self-update oc CLI via install.sh
     echo "Updating oc CLI via GitHub API ..."
@@ -884,7 +1410,7 @@ cmd_update() {
         docker rm "$id" >/dev/null 2>&1
 
         # Re-run with same config but new image
-        local run_args=(--name "$name" --platform "$PLATFORM")
+        local run_args=(--name "$name" --platform "${docker_platform:-linux/amd64}")
         [ -n "$binds" ] && while IFS= read -r b; do [ -n "$b" ] && run_args+=(-v "$b"); done <<< "$binds"
         # Pass env vars line-by-line to avoid word-splitting on values with spaces
         if [ -n "$env_raw" ]; then

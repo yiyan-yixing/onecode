@@ -202,7 +202,7 @@ RUN sed -i '/zh_CN.UTF-8/s/^# //g' /etc/locale.gen && locale-gen
 # Agent runtime config (mapped to Claude Code env vars in entrypoint.sh)
 ENV API_BASE_URL="https://api.anthropic.com" \
     API_KEY="" \
-    MODEL="GLM-5.1"
+    MODEL="claude-sonnet-4-6"
 
 # App port: pre-reserved port for AI-generated services
 # AI agents can start web services on this port and they will be accessible from outside the container
