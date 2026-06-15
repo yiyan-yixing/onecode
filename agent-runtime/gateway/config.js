@@ -9,6 +9,7 @@ const VSCODE_PORT = parseInt(process.env.VSCODE_INTERNAL_PORT || '8082', 10);
 const TERM_TOKEN = process.env.TERM_TOKEN || process.env.TTYD_TOKEN || '';
 const TERM_COLS = parseInt(process.env.TERM_COLS || '200', 10);
 const TERM_ROWS = parseInt(process.env.TERM_ROWS || '50', 10);
+const BACKEND = process.env.BACKEND || 'claude-code';
 
 const STATIC_DIR = path.join(__dirname, 'static');
 let VERSION = '';
@@ -24,6 +25,6 @@ const PROJECT_DIR = path.join(process.env.WORKSPACE_DIR || process.cwd(), '.clau
 
 module.exports = {
   PORT, FB_PORT, VSCODE_PORT, TERM_TOKEN, TERM_COLS, TERM_ROWS,
-  STATIC_DIR, VERSION, BRAND_NAME,
+  BACKEND, STATIC_DIR, VERSION, BRAND_NAME,
   SVC_REGISTRY, GLOBAL_DIR, PROJECT_DIR,
 };

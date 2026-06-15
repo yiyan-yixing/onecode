@@ -2,183 +2,156 @@
 
 [![Version](https://img.shields.io/badge/version-v0.4.0-blue)](https://github.com/yiyan-yixing/onecode/releases)
 [![License](https://img.shields.io/badge/license-MIT-green)](https://github.com/yiyan-yixing/onecode/blob/main/LICENSE)
-[![GHCR](https://img.shields.io/badge/ghcr.io-yiyan--yixing%2Fonecode-blue)](https://github.com/yiyan-yixing/onecode/pkgs/container/onecode)
 
-**一条命令启动 Claude Code，浏览器里写代码。** 容器化、零配置、内置 Agent 角色体系。
+浏览器里的 AI 开发环境。Docker 一键启动，内置 10 个 Agent 角色，手机也能写代码。
 
-## ✨ 核心特性
+> ⚠️ 本项目仅供个人学习和研究使用，详见 [免责声明](DISCLAIMER.md)。
 
-- 🚀 **一条命令** — `oc remote` 启动，浏览器打开即用
-- 🐳 **容器化** — Docker 一键部署，不用配环境
-- 🤖 **Agent 角色** — @dev @pm @designer... 内置一人公司团队，终端输入 `@dev` 自动路由
-- 📱 **移动端** — 手机也能写代码，响应式 + 虚拟键盘
-- 🔌 **VS Code 内置** — code-server 随时切换完整 IDE 体验
+---
+
+## ✨ 特性
+
+- 🐳 **一键部署** — `curl | bash` 安装，Docker 容器化，不用配环境
+- 🤖 **Agent 团队** — `@dev` `@pm` `@qa`… 10 个角色自动路由，一人公司全栈协作
+- 📱 **移动端** — 响应式布局 + 虚拟键盘，手机直接写代码
+- 🔌 **VS Code 内置** — code-server 一键切换完整 IDE
+- 🔀 **双后端** — Claude Code（默认）或 OpenCode（MIT），`--backend` 一键切换
 
 ---
 
 ## 快速开始
 
-### 一行安装
+### 一键安装
 
 ```bash
+# 推荐：通过 GitHub API 下载（不受 DNS 污染和镜像失效影响）
+curl -fsSL -H "Accept: application/vnd.github.v3.raw" \
+  https://api.github.com/repos/yiyan-yixing/onecode/contents/agent-runtime/bin/install.sh?ref=main | bash
+
+# 或直连 GitHub（海外服务器）
 curl -fsSL https://raw.githubusercontent.com/yiyan-yixing/onecode/main/agent-runtime/bin/install.sh | bash
 ```
 
-安装完成后刷新 PATH：
+安装完成后：
 
 ```bash
-source ~/.bashrc    # Linux
-source ~/.zshrc     # macOS
+source ~/.bashrc   # macOS 用 ~/.zshrc
+oc remote           # 启动 → 浏览器打开 http://localhost:7681
 ```
-
-然后启动：
-
-```bash
-oc remote    # 启动 Web 终端，浏览器打开 http://localhost:7681
-```
-
-> **前提条件**：[Docker](https://docs.docker.com/engine/install/) 已安装并运行 + API Key（Anthropic 或兼容 API）
-
-### 更多安装方式
 
 <details>
-<summary>📦 克隆仓库安装</summary>
+<summary>下载失败？试试其他方式</summary>
+
+`raw.githubusercontent.com` 在国内常因 DNS 污染报 SSL 错误，第三方镜像也可能失效。以下按稳定性排序：
 
 ```bash
-git clone https://github.com/yiyan-yixing/onecode.git
-cd onecode
-bash agent-runtime/bin/install.sh
+# 方法 1：GitHub API（推荐，不经过 raw CDN，最稳定）
+curl -fsSL -H "Accept: application/vnd.github.v3.raw" \
+  https://api.github.com/repos/yiyan-yixing/onecode/contents/agent-runtime/bin/install.sh?ref=main | bash
+
+# 方法 2：GitHub 镜像（可能失效，优先试 api 方式）
+curl -fsSL https://gh-proxy.com/yiyan-yixing/onecode/main/agent-runtime/bin/install.sh | bash
+curl -fsSL https://cors.isteed.cc/https://raw.githubusercontent.com/yiyan-yixing/onecode/main/agent-runtime/bin/install.sh | bash
+
+# 方法 3：跳过证书校验（最后手段）
+curl -kfsSL https://raw.githubusercontent.com/yiyan-yixing/onecode/main/agent-runtime/bin/install.sh | bash
 ```
 
-安装过程中会：
-1. 检测环境（OS / 架构）
-2. 安装 Docker（如未安装）
-3. 拉取镜像 `ghcr.io/yiyan-yixing/onecode:latest`
-4. 安装 `oc` 命令到 `~/.local/bin/oc`
-5. 保存配置到 `~/.onecode/settings.json`
+安装脚本内置 5 级降级策略，运行时自动尝试镜像 → 直连 → API → 跳过校验。
 
 </details>
 
 <details>
-<summary>🖥️ 远端服务器安装</summary>
-
-在任意 Linux/macOS 服务器上一键安装：
+<summary>安装选项</summary>
 
 ```bash
-# 一键安装（Docker + 镜像 + oc CLI + 配置）
-curl -fsSL https://raw.githubusercontent.com/yiyan-yixing/onecode/main/agent-runtime/bin/install.sh | bash
+# 预设 API Key（跳过交互式输入）
+curl -fsSL -H "Accept: application/vnd.github.v3.raw" \
+  https://api.github.com/repos/yiyan-yixing/onecode/contents/agent-runtime/bin/install.sh?ref=main \
+  | bash -s -- --api-key sk-ant-xxx
 
-# 带参数安装（跳过交互输入）
-curl -fsSL https://raw.githubusercontent.com/yiyan-yixing/onecode/main/agent-runtime/bin/install.sh | \
-  bash -s -- --api-key sk-xxx --api-base-url https://api.anthropic.com --model claude-sonnet-4-6
+# 使用 OpenAI 兼容 API
+... | bash -s -- --api-key sk-xxx --provider openai_compatible --api-base-url https://api.example.com/v1
 
-# 私有仓库需提供登录凭据
-curl -fsSL https://raw.githubusercontent.com/yiyan-yixing/onecode/main/agent-runtime/bin/install.sh | \
-  bash -s -- --registry-user YOUR_USER --registry-pass YOUR_PAT
-
-# 已有 Docker，只装 oc CLI
-curl -fsSL https://raw.githubusercontent.com/yiyan-yixing/onecode/main/agent-runtime/bin/install.sh | \
-  bash -s -- --skip-docker
-
-# 安装指定版本
-curl -fsSL https://raw.githubusercontent.com/yiyan-yixing/onecode/main/agent-runtime/bin/install.sh | \
-  bash -s -- --tag 0.4.0
+# 跳过 Docker 安装 | 指定镜像版本
+... | bash -s -- --skip-docker
+... | bash -s -- --tag 0.4
 ```
 
-**中国网络 / 私有仓库**：如果 `raw.githubusercontent.com` 出现 SSL 错误，或仓库是私有的，设置 `GITHUB_TOKEN` 后通过 GitHub API 下载：
-
-```bash
-# 1. 先获取 install.sh（通过 GitHub API，绕过 SSL 问题 + 支持私有仓库）
-GITHUB_TOKEN=ghp_xxx curl -fsSL \
-  -H "Authorization: token $GITHUB_TOKEN" \
-  -H "Accept: application/vnd.github.v3.raw" \
-  "https://api.github.com/repos/yiyan-yixing/onecode/contents/agent-runtime/bin/install.sh?ref=main" \
-  -o /tmp/onecode-install.sh
-
-# 2. 执行安装（GITHUB_TOKEN 同时用于镜像拉取和后续更新）
-GITHUB_TOKEN=ghp_xxx bash /tmp/onecode-install.sh --api-key sk-xxx
-
-# 或一行搞定：
-GITHUB_TOKEN=ghp_xxx bash <(curl -fsSL \
-  -H "Authorization: token $GITHUB_TOKEN" \
-  -H "Accept: application/vnd.github.v3.raw" \
-  "https://api.github.com/repos/yiyan-yixing/onecode/contents/agent-runtime/bin/install.sh?ref=main")
-```
-
-安装完成后刷新 PATH：
-
-```bash
-source ~/.bashrc    # Linux
-source ~/.zshrc     # macOS
-```
+安装过程：检测环境 → 安装 jq/Docker → 拉取镜像 → 安装 `oc` CLI → 交互式配置
 
 </details>
 
-<details>
-<summary>🐳 Docker 直接运行（不用 oc）</summary>
+> ⚠️ 镜像中**不包含** Claude Code（专有软件）。首次启动时用户自行从 npm 安装，等效于本机执行 `npm install -g`。详见 [免责声明](DISCLAIMER.md)。
+
+### Docker 直接运行
 
 ```bash
-docker run -it --rm \
-  -e API_KEY=your-key \
-  -e MODEL=claude-sonnet-4-6 \
-  -p 7681:7681 \
-  -p 8000:8000 \
-  -v $(pwd):/workspace \
-  ghcr.io/yiyan-yixing/onecode:latest \
-  remote
+docker build -t onecode agent-runtime/
+
+# claude-code 后端（默认，首次启动需等待 ~30s 安装）
+docker run -it --rm -e API_KEY=sk-xxx -p 7681:7681 -p 8000:8000 -v $(pwd):/workspace onecode remote
+
+# opencode 后端（MIT，预装在镜像中，即开即用）
+docker run -it --rm -e API_KEY=sk-xxx -e BACKEND=opencode -p 7681:7681 -p 8000:8000 -v $(pwd):/workspace onecode remote
 ```
 
-</details>
-
-<details>
-<summary>🔧 从源码构建镜像</summary>
+### 本地开发
 
 ```bash
-# 构建镜像（自动匹配当前架构：Apple Silicon → arm64，Intel → amd64）
-docker build -t ghcr.io/yiyan-yixing/onecode:latest agent-runtime/
-
-# 同时打版本 tag
-docker build -t ghcr.io/yiyan-yixing/onecode:latest \
-             -t ghcr.io/yiyan-yixing/onecode:0.4.0 \
-             agent-runtime/
-
-# 在 Intel 机器上强制构建 amd64 镜像
-docker build --platform linux/amd64 -t ghcr.io/yiyan-yixing/onecode:latest agent-runtime/
+git clone https://github.com/yiyan-yixing/onecode.git && cd onecode
+npm install && npm run dev    # → http://localhost:7681
 ```
 
-> 构建完成后，本地已有同名镜像，`oc` 命令直接可用，无需推送到远端。
-
-</details>
-
-<details>
-<summary>⬆️ 推送镜像到 GHCR</summary>
-
-```bash
-# 1. 登录 GitHub Container Registry
-echo "$GITHUB_TOKEN" | docker login ghcr.io -u YOUR_GITHUB_USERNAME --password-stdin
-
-# 2. 推送镜像
-docker push ghcr.io/yiyan-yixing/onecode:latest
-docker push ghcr.io/yiyan-yixing/onecode:0.4.0
-
-# 3. 在 GitHub 仓库 Settings → Packages 中确认镜像可见性为 Public
-```
-
-> **权限要求**：需要仓库的 `write:packages` 权限。可在 GitHub Settings → Developer settings → Personal access tokens 创建。
-
-</details>
+前提：[Node.js](https://nodejs.org/) + [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) + API Key
 
 ---
 
-## 为什么要用 OneCode？
+## oc 命令
 
-| 😫 没有 OneCode | 😎 有 OneCode |
-|----------------|--------------|
-| 本地装 Claude Code + 配环境 | `curl \| bash` 一条命令搞定 |
-| 只有命令行 | 浏览器 IDE + 终端 + 实时预览 |
-| 一个人干所有事 | @dev @pm @qa 10 个角色分工协作 |
-| 换电脑要重新配置 | Docker 到处跑，环境跟着走 |
-| 手机只能看文档 | 移动端直接写代码 |
+`oc` = OneCode CLI，管理容器化开发环境。
+
+### 常用命令
+
+| 命令 | 说明 |
+|------|------|
+| `oc` | 交互式 CLI（默认 `oc run`） |
+| `oc remote` | Web 终端，浏览器访问 |
+| `oc --backend opencode remote` | 使用 OpenCode 后端 |
+| `oc ssh <name>` | 给容器开启 SSH |
+| `oc shell [name]` | 进入容器 shell |
+| `oc stop <name>` | 停止并删除容器 |
+| `oc ls` | 列出容器和镜像 |
+| `oc config` | 查看/修改配置 |
+| `oc help [cmd]` | 查看帮助 |
+
+### 全局选项
+
+| 选项 | 说明 | 默认值 |
+|------|------|--------|
+| `-n NAME` | 容器名称 | 自动生成 |
+| `-d DIR` | 挂载目录 | 当前目录 |
+| `-p PORT` | Web 终端端口 | `7681` |
+| `-a PORT` | App 服务端口 | `8000` |
+| `--backend` | AI 后端：`claude-code` / `opencode` | `claude-code` |
+| `--https` | 启用 HTTPS（自签证书） | 关 |
+| `--tag TAG` | 镜像版本 | `latest` |
+
+---
+
+## 双后端
+
+OneCode 支持两种 AI 后端，通过 `--backend` 或环境变量 `BACKEND` 切换：
+
+| | Claude Code | OpenCode |
+|---|---|---|
+| **许可证** | 专有（Anthropic） | MIT |
+| **镜像中** | ❌ 运行时安装 | ✅ 预装 |
+| **首次启动** | 等待 30-60s | 即开即用 |
+| **切换方式** | `--backend claude-code` | `--backend opencode` |
+| **配置持久化** | `oc config set backend=claude-code` | `oc config set backend=opencode` |
+
+两者共用同一份配置（`provider` / `api_key` / `model`），无需配两套。
 
 ---
 
@@ -191,7 +164,7 @@ docker push ghcr.io/yiyan-yixing/onecode:0.4.0
 │  Files   │                                                    │
 │  ~ /src  │   ┌────────────────────────────────────────┐      │
 │  /app    │   │    xterm.js Terminal              │      │
-│  ...     │   │    (直连 Claude Code via PTY)       │      │
+│  ...     │   │    (直连 AI 后端 via PTY)           │      │
 │──────────│   └────────────────────────────────────────┘      │
 │  Agents  │                                                    │
 │  👔 CEO  │   ┌────────────────────────────────────────┐      │
@@ -204,170 +177,76 @@ docker push ghcr.io/yiyan-yixing/onecode:0.4.0
 └─────────────────────────────────────────────────────────────┘
 ```
 
-浏览器打开 http://localhost:7681
-
 ---
 
-## oc 命令
-
-`oc` 是 OneCode 的简写命令，管理容器化 Claude Code 的一切。
-
-### 命令列表
-
-| 命令 | 说明 |
-|------|------|
-| `oc` | 交互式 Claude CLI（默认 = `oc run`） |
-| `oc remote` | 启动 Web 终端，浏览器访问 |
-| `oc ssh <name>` | 给运行中的容器开启 SSH |
-| `oc shell [name]` | 进入容器 shell |
-| `oc stop <name>` | 停止并删除容器 |
-| `oc update` | 拉取最新镜像 + 自更新 CLI |
-| `oc ls` | 列出容器和镜像 |
-| `oc config` | 查看配置（`~/.onecode/settings.json`） |
-| `oc help [cmd]` | 查看帮助 |
-
-### 全局选项
-
-| 选项 | 说明 | 默认值 |
-|------|------|--------|
-| `-n NAME` | 容器名称 | `oc-<目录>-<pid>-<时间戳>` |
-| `-d DIR` | 挂载的本地目录 | 当前目录 |
-| `-p PORT` | Web 终端端口 | `7681` |
-| `-a PORT` | App 服务端口 | `8000` |
-| `-s PORT` | SSH 端口 | `8222` |
-| `--tag TAG` | 镜像版本 | `latest` |
-| `--https` | 启用 HTTPS（自签证书） | 关 |
-| `--debug` | 显示完整 docker 命令 | 关 |
-
-### 典型用法
-
-```bash
-# 1. 交互式 CLI — 在当前目录启动 Claude
-oc
-
-# 2. Web 终端 — 浏览器打开 http://localhost:7681
-oc remote
-
-# 3. 自定义端口 + 目录
-oc -p 8080 -d /path/to/project remote
-
-# 4. HTTPS 模式（非 localhost 访问时）
-oc --https remote
-
-# 5. 开启 SSH — 从另一台机器用 VS Code 连接
-oc ssh my-container
-# 然后: ssh -p 8222 node@<ip>
-
-# 6. 进入容器调试
-oc shell my-container
-
-# 7. 停止容器
-oc stop my-container
-
-# 8. 查看运行中的容器
-oc ls
-
-# 9. 更新到最新版本
-oc update
-```
-
----
-
-## Docker 运行详解
-
-| 端口 | 服务 |
-|------|------|
-| `7681` | Gateway（Web IDE 入口） |
-| `8000` | App 服务端口（Agent 启动的 Web 服务） |
-| `8222` | SSH（需手动开启） |
-
-### 环境变量
+## 环境变量
 
 | 变量 | 说明 | 默认值 |
 |------|------|--------|
-| `API_KEY` | API 密钥（映射到 `ANTHROPIC_API_KEY`） | 必填 |
-| `API_BASE_URL` | API 地址（映射到 `ANTHROPIC_BASE_URL`） | `https://api.anthropic.com` |
-| `MODEL` | 模型名（映射到 `ANTHROPIC_MODEL`） | `claude-sonnet-4-6` |
+| `API_KEY` | API 密钥 → `ANTHROPIC_API_KEY` | 必填 |
+| `API_BASE_URL` | API 地址 → `ANTHROPIC_BASE_URL` | `https://api.anthropic.com` |
+| `MODEL` | 模型名 → `ANTHROPIC_MODEL` | `claude-sonnet-4-6` |
+| `BACKEND` | AI 后端 | `claude-code` |
 | `GATEWAY_HTTPS` | 启用 HTTPS | `0` |
-| `TERM_TOKEN` | 终端访问 Token（留空则无需认证） | 空 |
-
----
-
-## 配置文件
-
-`oc` 的配置存放在 `~/.onecode/settings.json`：
-
-```json
-{
-  "API_KEY": "sk-xxx",
-  "API_BASE_URL": "https://api.anthropic.com",
-  "MODEL": "claude-sonnet-4-6"
-}
-```
+| `TERM_TOKEN` | 终端访问 Token | 空（无需认证） |
 
 优先级：**环境变量 > 配置文件 > 默认值**
 
 ---
 
-## 本地开发（无 Docker）
+## 配置
 
-如果已有 Node.js + Claude Code CLI，可直接启动 gateway：
+`~/.onecode/settings.json`：
+
+```json
+{
+  "provider": "anthropic",
+  "api_key": "sk-xxx",
+  "api_base_url": "https://api.anthropic.com",
+  "model": "claude-sonnet-4-6",
+  "backend": "claude-code"
+}
+```
 
 ```bash
-cd onecode
-npm install
-npm run dev
-# 浏览器打开 http://localhost:7681
+oc config list              # 查看所有配置
+oc config set api_key=sk-xxx   # 设置值
+oc config set backend=opencode  # 切换后端
+oc config validate          # 校验配置
 ```
 
 ---
 
 ## Agent 角色
 
-Agent 角色从 `.claude/agents/*.md` 文件动态加载，无需修改前端代码即可增减角色。
+角色从 `.claude/agents/*.md` 动态加载，无需改前端。文件名即 `@id`（`dev.md` → `@dev`）：
 
-**定义格式**（YAML frontmatter）：
+| 角色 | 代号 | 用途 |
+|------|------|------|
+| 👔 CEO | @ceo | 战略规划、重大决策 |
+| 📋 PM | @pm | 需求定义、优先级 |
+| 🎨 Designer | @designer | 快速原型、UI/UX |
+| 🏛 Architect | @architect | 技术选型、架构评审 |
+| 💻 Dev | @dev | 代码编写、Bug 修复 |
+| ⚙️ DevOps | @devops | CI/CD、一键部署 |
+| 🧪 QA | @qa | 测试用例、质量把关 |
+| 📢 Ops | @ops | 内容运营、增长实验 |
+| 📊 Data | @data | 埋点设计、效果分析 |
+| 💰 Fin | @fin | 记账、现金流追踪 |
+
+**自定义角色**：在项目 `.claude/agents/` 下创建 `.md` 文件即可：
 
 ```markdown
 ---
-name: Dev
-description: 一人公司开发者。用于代码编写、架构决策、Bug 修复、发布。用 @dev 调用。
-tools: Read, Write, Bash, Grep, Glob
-model: sonnet
-color: yellow
-icon: 💻
+name: MyAgent
+description: 自定义 Agent 描述
+tools: Read, Write, Bash
+color: green
+icon: 🚀
 ---
 
-（Agent 的系统提示词正文...）
+系统提示词正文...
 ```
-
-| 字段 | 说明 | 示例 |
-|------|------|------|
-| `name` | 显示名称（必填，有此字段才算有效 Agent） | `Dev` |
-| `description` | 简短描述，显示在 Agent 面板 | `一人公司开发者` |
-| `tools` | 可用工具列表 | `Read, Write, Bash` |
-| `model` | 使用的模型 | `sonnet` |
-| `color` | UI 颜色（支持颜色名或 hex） | `yellow` / `#10B981` |
-| `icon` | 角色图标 emoji（可选，未设置时显示首字母） | `💻` |
-
-文件名（去 `.md`）即为 `@id`，如 `dev.md` → `@dev`。
-
-**内置角色**（项目自带的 `.claude/agents/` 目录）：
-
-| 角色 | 代号 | 颜色 |
-|------|------|------|
-| CEO | @ceo | blue |
-| PM | @pm | green |
-| Designer | @designer | purple |
-| Architect | @architect | indigo |
-| Dev | @dev | yellow |
-| DevOps | @devops | orange |
-| QA | @qa | red |
-| Ops | @ops | magenta |
-| Data | @data | teal |
-| Fin | @fin | cyan |
-
-没有 Agent 时，面板显示空状态提示："在 .claude/agents/ 下创建 .md 文件来添加智能体"。
 
 ---
 
@@ -375,57 +254,16 @@ icon: 💻
 
 ```
 onecode/
-├── agent-runtime/              # 运行时核心
-│   ├── gateway/                # Node.js 网关
-│   │   ├── index.js           # 入口服务器
-│   │   ├── onecode.html       # OneCode 品牌 UI
-│   │   ├── pty.js             # PTY 进程管理
-│   │   ├── term-ws.js         # 终端 WebSocket
-│   │   ├── cc-status.js       # Claude Code 状态
-│   │   └── ...
-│   ├── bin/                    # CLI 工具
-│   │   ├── oc                 # OneCode CLI 主命令
-│   │   ├── install            # 安装 oc 到 ~/.local/bin/
-│   │   ├── install.sh          # 一键安装脚本
-│   │   └── start-remote.sh    # 容器内启动脚本
-│   ├── Dockerfile              # 镜像定义
-│   └── entrypoint.sh           # 入口脚本
+├── agent-runtime/
+│   ├── gateway/           # Node.js 网关（HTTP + WebSocket + PTY）
+│   ├── bin/
+│   │   ├── oc             # CLI 主命令
+│   │   └── install.sh     # 一键安装脚本
+│   ├── Dockerfile
+│   └── entrypoint.sh
+├── tests/                 # 277 assertions 测试套件
+├── DISCLAIMER.md
 └── package.json
-```
-
----
-
-## 验证步骤
-
-在宿主机上验证安装是否成功：
-
-```bash
-# 1. 检查 oc 命令
-which oc
-oc --version
-
-# 2. 检查配置
-oc config
-
-# 3. 启动 Web 终端
-oc remote
-
-# 4. 浏览器打开
-# http://localhost:7681
-# 应看到 OneCode 界面：终端 + 文件侧栏 + Agent 列表
-
-# 5. 在终端中测试 Agent 路由
-# 输入: @dev 写一个 Hello World
-# 应看到 Claude 以开发者角色响应
-
-# 6. 测试 VS Code
-# 浏览器打开: http://localhost:7681/vscode/
-
-# 7. 测试文件浏览
-# 浏览器打开: http://localhost:7681/files/
-
-# 8. 停止容器
-oc stop <container-name>
 ```
 
 ---
@@ -434,10 +272,10 @@ oc stop <container-name>
 
 | 版本 | 说明 |
 |------|------|
-| v0.4.0 | oc config set + 占位 key 检测 + Agent icon 体系 |
-| v0.3.5 | 动态 Agent 加载（.claude/agents/*.md）、oc 首次引导配置、自动架构检测 |
-| v0.2.0 | gateway + PTY + xterm.js + Agent 角色侧栏 + oc CLI |
-| v0.1.0 | Next.js MVP：Chat + Monaco Editor + @角色名 + 模拟数据 |
+| v0.4.0 | 双后端（claude-code / opencode）、`--backend` 切换、统一配置 |
+| v0.3.5 | 动态 Agent 加载、首次引导配置、自动架构检测 |
+| v0.2.0 | Gateway + PTY + xterm.js + Agent 侧栏 + oc CLI |
+| v0.1.0 | Next.js MVP：Chat + Monaco + @角色名 |
 
 详见 [CHANGELOG.md](CHANGELOG.md)。
 

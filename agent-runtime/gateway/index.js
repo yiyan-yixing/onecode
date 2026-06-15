@@ -140,10 +140,51 @@ server.on('upgrade', (req, socket, head) => {
   handleWsUpgrade(req, socket, head, route);
 });
 
-// Spawn the main terminal PTY
-ptyManager.spawn('claude', ['--permission-mode', 'bypassPermissions'], {
-  HOME: '/home/work',
-});
+// Spawn the main terminal PTY based on BACKEND env var
+// Supported backends: claude-code (default), opencode
+const backend = process.env.BACKEND || 'claude-code';
+
+if (backend === 'opencode') {
+  // OpenCode is pre-installed (MIT license), start immediately
+  ptyManager.spawn('opencode', [], {
+    HOME: '/home/work',
+  });
+} else {
+  // Claude Code: may need runtime install
+  const claudeReady = (() => {
+    try {
+      const { execSync } = require('child_process');
+      execSync('which claude', { stdio: 'ignore' });
+      return true;
+    } catch (_) {
+      return false;
+    }
+  })();
+
+  if (claudeReady) {
+    ptyManager.spawn('claude', ['--permission-mode', 'bypassPermissions'], {
+      HOME: '/home/work',
+    });
+  } else {
+    // Claude is being installed in background (by entrypoint.sh).
+    // Start a shell that shows a friendly message and auto-launches claude when ready.
+    ptyManager.spawn('/bin/bash', ['-c', [
+      'echo ""',
+      'echo "  ⏳ Claude Code CLI is being installed..."',
+      'echo "  This only happens on first start (~30-60s)."',
+      'echo "  OneCode is ready — you can browse files and agents while waiting."',
+      'echo ""',
+      // Wait for claude to become available (install runs in background)
+      'while ! command -v claude &>/dev/null; do sleep 2; done',
+      'echo ""',
+      'echo "  ✅ Claude Code CLI installed! Starting..."',
+      'echo ""',
+      'exec claude --permission-mode bypassPermissions',
+    ].join('\n')], {
+      HOME: '/home/work',
+    });
+  }
+}
 
 server.listen(config.PORT, '0.0.0.0', () => {
   const proto = server instanceof https.Server ? 'https' : 'http';

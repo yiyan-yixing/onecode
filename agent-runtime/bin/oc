@@ -10,16 +10,55 @@ REPO_NAME="onecode"
 REPO_BRANCH="main"
 
 # ── GitHub fetch helper ────────────────────────────────────────────
-# Supports private repos (via GITHUB_TOKEN) and China network (avoids raw.githubusercontent.com SSL issues)
+# Robust download: mirror → GitHub API → direct raw → insecure fallback
+# GitHub API is preferred over raw.* because it uses a different CDN
+# and is not affected by raw.githubusercontent.com DNS pollution.
 github_fetch() {
     local path="$1"
     local api_url="https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/contents/${path}?ref=${REPO_BRANCH}"
     local raw_url="https://raw.githubusercontent.com/${REPO_OWNER}/${REPO_NAME}/${REPO_BRANCH}/${path}"
-    if [ -n "${GITHUB_TOKEN:-}" ]; then
-        curl -fsSL -H "Authorization: token ${GITHUB_TOKEN}" -H "Accept: application/vnd.github.v3.raw" "$api_url" 2>/dev/null
-    else
-        curl -fsSL "$raw_url" 2>/dev/null || curl -fsSL -H "Accept: application/vnd.github.v3.raw" "$api_url" 2>/dev/null
+    local mirror_url=""
+
+    # Build mirror URL if gh_mirror is configured
+    if [ -n "${gh_mirror:-}" ]; then
+        mirror_url="${gh_mirror}/${raw_url}"
     fi
+
+    # Priority 1: Mirror (if configured)
+    if [ -n "$mirror_url" ]; then
+        if curl -fsSL --http1.1 "$mirror_url" 2>/dev/null; then
+            return 0
+        fi
+    fi
+
+    # Priority 2: GitHub API (most reliable — different CDN from raw.*)
+    if [ -n "${GITHUB_TOKEN:-}" ]; then
+        if curl -fsSL --http1.1 \
+            -H "Authorization: token ${GITHUB_TOKEN}" \
+            -H "Accept: application/vnd.github.v3.raw" \
+            "$api_url" 2>/dev/null; then
+            return 0
+        fi
+    fi
+    if curl -fsSL --http1.1 -H "Accept: application/vnd.github.v3.raw" "$api_url" 2>/dev/null; then
+        return 0
+    fi
+
+    # Priority 3: Direct raw.githubusercontent.com
+    if curl -fsSL --http1.1 "$raw_url" 2>/dev/null; then
+        return 0
+    fi
+
+    # Priority 4: Insecure fallback
+    if [ -n "$mirror_url" ]; then
+        curl -fsSLk --http1.1 "$mirror_url" 2>/dev/null && return 0
+    fi
+    curl -fsSLk --http1.1 "$raw_url" 2>/dev/null && return 0
+    curl -fsSLk -H "Accept: application/vnd.github.v3.raw" "$api_url" 2>/dev/null && return 0
+
+    echo "Error: Failed to download ${path}" >&2
+    echo "  Try: oc config set gh_mirror=https://gh-proxy.com" >&2
+    return 1
 }
 
 # ── Config ────────────────────────────────────────────────────────
@@ -154,6 +193,7 @@ cfg_save_all() {
       --arg api_key "${api_key:-}" \
       --arg api_base_url "${api_base_url:-}" \
       --arg model "${model:-}" \
+      --arg backend "${backend:-claude-code}" \
       --arg docker_platform "${docker_platform:-linux/amd64}" \
       --arg image_tag "${image_tag:-latest}" \
       --arg gh_mirror "${gh_mirror:-https://gh-proxy.com}" \
@@ -162,7 +202,7 @@ cfg_save_all() {
       --argjson ssh_port "${ssh_port:-8222}" \
       --arg term_token "${term_token:-}" \
       --argjson gateway_https "${gateway_https:-false}" \
-    '{"$version":$v,$provider,$api_key,$api_base_url,$model,$docker_platform,$image_tag,$gh_mirror,$gateway_port,$app_port,$ssh_port,$term_token,$gateway_https}' \
+    '{"$version":$v,$provider,$api_key,$api_base_url,$model,$backend,$docker_platform,$image_tag,$gh_mirror,$gateway_port,$app_port,$ssh_port,$term_token,$gateway_https}' \
     > "$tmp" && mv "$tmp" "$OC_CONFIG" && chmod 600 "$OC_CONFIG"
 }
 
@@ -200,6 +240,12 @@ cfg_validate_key() {
         api_base_url)
             if [ -n "$val" ] && ! [[ "$val" =~ ^https?://.+ ]]; then
                 echo "error: api_base_url must be a valid URL (http:// or https://)"
+                return 1
+            fi
+            ;;
+        backend)
+            if [ "$val" != "claude-code" ] && [ "$val" != "opencode" ]; then
+                echo "error: backend must be claude-code or opencode"
                 return 1
             fi
             ;;
@@ -369,6 +415,8 @@ build_docker_args() {
     local name="${CONTAINER_NAME:-oc-$(basename "$(pwd)")-$$_$(date +%s)}"
     local dir="${WORKDIR:-$(pwd)}"
     local oc_name="${CONTAINER_NAME:-$(basename "$(pwd)")}"
+    # Backend: CLI flag > settings.json > default (claude-code)
+    local backend="${OC_BACKEND:-${backend:-claude-code}}"
     args=(
         --platform "${docker_platform:-linux/amd64}"
         --name "$name"
@@ -378,6 +426,7 @@ build_docker_args() {
         -e "API_KEY=${api_key:-}"
         -e "MODEL=${model:-}"
         -e "OC_NAME=$oc_name"
+        -e "BACKEND=$backend"
     )
     # .ssh mounted read-only by default (for git)
     local ssh_dir="${SSH_DIR:-$HOME/.ssh}"
@@ -422,6 +471,7 @@ Global Options:
   -p PORT       Web terminal port (remote mode, default: 7681)
   -a PORT       App service port (AI-generated services, default: 8000)
   -s PORT       SSH port (ssh command, default: 8222)
+  --backend NAME  AI backend: claude-code (default) or opencode
   --tag TAG     Image tag (default: latest)
   --https       Enable HTTPS on gateway (self-signed cert, for direct non-localhost access)
   --debug       Show full docker commands and container logs for troubleshooting
@@ -429,9 +479,9 @@ Global Options:
   -h            Show help
 
 Quick Start:
-  oc                                    # interactive CLI (latest image)
-  oc --tag 0.2 remote                   # web terminal with specific version
+  oc                                    # interactive CLI (claude-code backend)
   oc remote                             # web terminal at http://localhost:7681
+  oc --backend opencode remote          # web terminal with OpenCode backend
   oc --https remote                     # HTTPS with self-signed cert
   oc ssh <name>                         # enable SSH on running container
 
@@ -704,6 +754,7 @@ APP_PORT=""
 SSH_PORT="8222"
 GATEWAY_HTTPS=""
 OC_DEBUG=""
+OC_BACKEND=""
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -712,6 +763,7 @@ while [ $# -gt 0 ]; do
         -p)          PORT="$2"; shift 2 ;;
         -a)          APP_PORT="$2"; shift 2 ;;
         -s)          SSH_PORT="$2"; shift 2 ;;
+        --backend)   OC_BACKEND="$2"; shift 2 ;;
         --tag)       IMAGE_TAG="$2"; shift 2 ;;
         --https)    GATEWAY_HTTPS="1"; shift ;;
         --debug)    OC_DEBUG="1"; shift ;;
@@ -734,6 +786,7 @@ while [ $# -gt 0 ]; do
         -p)        PORT="$2"; shift 2 ;;
         -a)        APP_PORT="$2"; shift 2 ;;
         -s)        SSH_PORT="$2"; shift 2 ;;
+        --backend)   OC_BACKEND="$2"; shift 2 ;;
         --tag)     IMAGE_TAG="$2"; shift 2 ;;
         --https)    GATEWAY_HTTPS="1"; shift ;;
         --debug)    OC_DEBUG="1"; shift ;;
@@ -821,10 +874,17 @@ cmd_remote() {
     fi
     local proto="http"
     [ "${GATEWAY_HTTPS:-0}" = "1" ] && proto="https"
+    local display_backend="${backend:-claude-code}"
     echo "OneCode running:"
-    echo "  Web:  ${proto}://localhost:${p}"
-    echo "  App:  ${proto}://localhost:${ap}  (AI-generated services)"
+    echo "  Web:     ${proto}://localhost:${p}"
+    echo "  App:     ${proto}://localhost:${ap}  (AI-generated services)"
+    echo "  Backend: ${display_backend}"
     echo "  Container: ${actual_name}"
+    echo ""
+    if [ "$display_backend" = "claude-code" ]; then
+        echo "  ⏳ First start: Claude Code CLI is installing in background (~30-60s)"
+        echo "  You can open the Web UI immediately — terminal will auto-start when ready."
+    fi
     echo ""
     echo "  oc ssh ${actual_name}              # enable SSH"
     echo "  oc shell ${actual_name}"
@@ -1009,7 +1069,7 @@ cmd_config_get() {
     local key="$1"
     if [ -z "$key" ]; then
         echo "Usage: oc config get <key>" >&2
-        echo "  Keys: provider, api_key, api_base_url, model, docker_platform, image_tag, gh_mirror, gateway_port, app_port, ssh_port, term_token, gateway_https" >&2
+        echo "  Keys: provider, api_key, api_base_url, model, backend, docker_platform, image_tag, gh_mirror, gateway_port, app_port, ssh_port, term_token, gateway_https" >&2
         return 1
     fi
     key=$(cfg_normalize_key "$key")
@@ -1076,12 +1136,13 @@ cmd_config_get() {
         gateway_https)   echo "false  (from: default)" ;;
         gh_mirror)       echo "https://gh-proxy.com  (from: default)" ;;
         provider)        echo "anthropic  (from: default)" ;;
+        backend)         echo "claude-code  (from: default)" ;;
         *)               echo "(not set)" ;;
     esac
 }
 
 cmd_config_list() {
-    local keys=(provider api_key api_base_url model docker_platform image_tag gh_mirror gateway_port app_port ssh_port term_token gateway_https)
+    local keys=(provider api_key api_base_url model backend docker_platform image_tag gh_mirror gateway_port app_port ssh_port term_token gateway_https)
     local file_data="{}"
     [ -f "$OC_CONFIG" ] && file_data=$(cat "$OC_CONFIG")
 
@@ -1134,6 +1195,7 @@ cmd_config_list() {
                         gateway_https)   val="false"; source="default" ;;
                         gh_mirror)       val="https://gh-proxy.com"; source="default" ;;
                         provider)        val="anthropic"; source="default" ;;
+                        backend)         val="claude-code"; source="default" ;;
                         *)               val="(not set)"; source="" ;;
                     esac
                 fi
@@ -1187,7 +1249,7 @@ cmd_config_reset() {
 cmd_config_validate() {
     require_jq
     local has_error=false
-    local keys=(provider api_key api_base_url model docker_platform gateway_port app_port ssh_port gateway_https)
+    local keys=(provider api_key api_base_url model backend docker_platform gateway_port app_port ssh_port gateway_https)
     local file_data="{}"
     [ -f "$OC_CONFIG" ] && file_data=$(cat "$OC_CONFIG")
 

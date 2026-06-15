@@ -45,38 +45,90 @@ TERM_TOKEN=""
 GATEWAY_HTTPS="false"
 
 # ── Colors ─────────────────────────────────────────────────────────
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[0;33m'
-CYAN='\033[0;36m'
-NC='\033[0m'
+# Use raw $'\033[..m' syntax to avoid \\033 interpretation issues
+# in echo -e/printf where backslashes in the banner text interact badly.
+RED=$'\033[0;31m'
+GREEN=$'\033[0;32m'
+YELLOW=$'\033[0;33m'
+CYAN=$'\033[0;36m'
+NC=$'\033[0m'
 
-info()  { echo -e "${CYAN}[info]${NC} $*"; }
-ok()    { echo -e "${GREEN}[ok]${NC} $*"; }
-warn()  { echo -e "${YELLOW}[warn]${NC} $*"; }
-err()   { echo -e "${RED}[error]${NC} $*" >&2; }
+info()  { echo "${CYAN}[info]${NC} $*"; }
+ok()    { echo "${GREEN}[ok]${NC} $*"; }
+warn()  { echo "${YELLOW}[warn]${NC} $*"; }
+err()   { echo "${RED}[error]${NC} $*" >&2; }
 
 # ── GitHub fetch helper ────────────────────────────────────────────
-# Supports private repos (via GITHUB_TOKEN) and China network (avoids raw.githubusercontent.com SSL issues)
+# Robust download with multiple fallback strategies.
+# Priority: mirror → GitHub API → direct raw → insecure fallback
+# GitHub API is preferred over raw.githubusercontent.com because:
+#   - Different CDN, not affected by raw.* DNS pollution in China
+#   - No SSL certificate mismatch issues
+#   - Works without any third-party mirror
 github_fetch() {
     local path="$1"
     local api_url="https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/contents/${path}?ref=${REPO_BRANCH}"
     local raw_url="https://raw.githubusercontent.com/${REPO_OWNER}/${REPO_NAME}/${REPO_BRANCH}/${path}"
-    if [ -n "${GITHUB_TOKEN:-}" ]; then
-        curl -fsSL -H "Authorization: token ${GITHUB_TOKEN}" -H "Accept: application/vnd.github.v3.raw" "$api_url" 2>/dev/null
-    else
-        curl -fsSL "$raw_url" 2>/dev/null || curl -fsSL -H "Accept: application/vnd.github.v3.raw" "$api_url" 2>/dev/null
+    local mirror_url=""
+
+    # Build mirror URL if GH_MIRROR is set
+    if [ -n "${GH_MIRROR:-}" ]; then
+        # Mirror path format: mirror/raw.githubusercontent.com/owner/repo/branch/path
+        mirror_url="${GH_MIRROR}/${raw_url}"
     fi
+
+    # Priority 1: Mirror (if configured)
+    if [ -n "$mirror_url" ]; then
+        if curl -fsSL --http1.1 "$mirror_url" 2>/dev/null; then
+            return 0
+        fi
+        warn "Mirror download failed, trying next method..."
+    fi
+
+    # Priority 2: GitHub API (most reliable — different CDN, no DNS pollution)
+    #             With token for private repos, without token for public.
+    if [ -n "${GITHUB_TOKEN:-}" ]; then
+        if curl -fsSL --http1.1 \
+            -H "Authorization: token ${GITHUB_TOKEN}" \
+            -H "Accept: application/vnd.github.v3.raw" \
+            "$api_url" 2>/dev/null; then
+            return 0
+        fi
+    fi
+    if curl -fsSL --http1.1 -H "Accept: application/vnd.github.v3.raw" "$api_url" 2>/dev/null; then
+        return 0
+    fi
+
+    # Priority 3: Direct raw.githubusercontent.com
+    if curl -fsSL --http1.1 "$raw_url" 2>/dev/null; then
+        return 0
+    fi
+
+    # Priority 4: Insecure fallback (corporate proxy / DNS poisoning)
+    warn "All secure methods failed, retrying without SSL verification..."
+    if [ -n "$mirror_url" ]; then
+        curl -fsSLk --http1.1 "$mirror_url" 2>/dev/null && return 0
+    fi
+    curl -fsSLk --http1.1 "$raw_url" 2>/dev/null && return 0
+    curl -fsSLk -H "Accept: application/vnd.github.v3.raw" "$api_url" 2>/dev/null && return 0
+
+    err "Failed to download: ${path}"
+    err "  Solutions:"
+    err "    1. Set mirror: export GH_MIRROR=https://gh-proxy.com"
+    err "    2. Set token:  export GITHUB_TOKEN=your-pat"
+    err "    3. Manual:     curl -fsSL -H 'Accept: application/vnd.github.v3.raw' \\"
+    err "                   https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/contents/${path}?ref=${REPO_BRANCH}"
+    return 1
 }
 
 # ── Banner ─────────────────────────────────────────────────────────
 show_banner() {
     echo ""
-    echo -e "${CYAN}  ___              ____          _      ${NC}"
-    echo -e "${CYAN} / _ \\ _ __   ___ / ___|___   __| | ___ ${NC}"
-    echo -e "${CYAN}| | | | '_ \\ / _ \\ |   / _ \\ / _\` |/ _ \\${NC}"
-    echo -e "${CYAN}| |_| | | | |  __/ |__| (_) | (_| |  __/${NC}"
-    echo -e "${CYAN} \\___/|_| |_|\\___|\\____\\___/ \\__,_|\\___|${NC}"
+    echo "${CYAN}  ___              ____          _      ${NC}"
+    echo "${CYAN} / _ \\ _ __   ___ / ___|___   __| | ___ ${NC}"
+    echo "${CYAN}| | | | '_ \\ / _ \\ |   / _ \\ / _\` |/ _ \\${NC}"
+    echo "${CYAN}| |_| | | | |  __/ |__| (_) | (_| |  __/${NC}"
+    echo "${CYAN} \\___/|_| |_|\\___|\\____\\___/ \\__,_|\\___|${NC}"
     echo ""
     echo "  OneCode v${VERSION} - Install"
     echo ""
@@ -539,6 +591,7 @@ configure() {
       --arg api_key "${API_KEY:-}" \
       --arg api_base_url "${API_BASE_URL:-}" \
       --arg model "${MODEL:-}" \
+      --arg backend "${BACKEND:-claude-code}" \
       --arg docker_platform "${DOCKER_PLATFORM:-linux/amd64}" \
       --arg image_tag "${IMAGE_TAG:-latest}" \
       --arg gh_mirror "${GH_MIRROR:-}" \
@@ -547,7 +600,7 @@ configure() {
       --argjson ssh_port "${SSH_PORT:-8222}" \
       --arg term_token "${TERM_TOKEN:-}" \
       --argjson gateway_https "${GATEWAY_HTTPS:-false}" \
-    '{$version:$v,$provider,$api_key,$api_base_url,$model,$docker_platform,$image_tag,$gh_mirror,$gateway_port,$app_port,$ssh_port,$term_token,$gateway_https}' \
+    '{$version:$v,$provider,$api_key,$api_base_url,$model,$backend,$docker_platform,$image_tag,$gh_mirror,$gateway_port,$app_port,$ssh_port,$term_token,$gateway_https}' \
     > "$tmp" && mv "$tmp" "$OC_HOME/settings.json" && chmod 600 "$OC_HOME/settings.json"
 
     ok "Config saved to ${OC_HOME}/settings.json"
@@ -640,17 +693,17 @@ main() {
     verify
 
     echo ""
-    echo -e "${GREEN}  Installation complete!${NC}"
+    echo "${GREEN}  Installation complete!${NC}"
     echo ""
     if [ "$OS_ID" = "darwin" ]; then
-        echo -e "  ${YELLOW}Run this first to load PATH & Docker settings:${NC}"
+        echo "  ${YELLOW}Run this first to load PATH & Docker settings:${NC}"
         echo "    source ~/.zshrc"
     else
-        echo -e "  ${YELLOW}Run this first to load PATH:${NC}"
+        echo "  ${YELLOW}Run this first to load PATH:${NC}"
         echo "    source ~/.bashrc"
     fi
     echo ""
-    echo -e "${CYAN}  Common commands:${NC}"
+    echo "${CYAN}  Common commands:${NC}"
     echo "    oc                              # start interactive Claude CLI"
     echo "    oc -d /path/to/project          # mount a specific project"
     echo "    oc remote                       # web terminal (http://localhost:7681)"
@@ -664,7 +717,7 @@ main() {
     echo "    oc config list                  # show all config with sources"
     echo ""
     if [ "$OS_ID" = "darwin" ] && [ "${ARCH_ALIAS:-}" = "arm64" ]; then
-        echo -e "${YELLOW}  Note: Running linux/amd64 image via Rosetta emulation.${NC}"
+        echo "${YELLOW}  Note: Running linux/amd64 image via Rosetta emulation.${NC}"
         echo "  Make sure Docker Desktop > Settings > \"Use Rosetta for x86_64/amd64"
         echo "  emulation on Apple Silicon\" is enabled."
         echo ""

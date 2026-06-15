@@ -5,6 +5,9 @@
   "private": true,
   "scripts": {
     "dev": "node agent-runtime/gateway/index.js",
+    "test": "node tests/run.js",
+    "test:gateway": "node tests/run.js gateway",
+    "test:cli": "node tests/run.js cli",
     "build": "echo \"No build step needed — gateway runs directly\" && exit 0"
   },
   "repository": {

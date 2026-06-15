@@ -16,6 +16,64 @@ if [ "$(id -u)" = "0" ] && [ -d /workspace ]; then
     fi
 fi
 
+# Install AI backend CLI at runtime (not pre-baked into the image)
+# This avoids redistribution of proprietary software.
+# OpenCode (MIT) is pre-installed in the image; Claude Code is installed on demand.
+BACKEND="${BACKEND:-claude-code}"
+CLAUDE_CODE_VERSION="${CLAUDE_CODE_VERSION:-2.1.177}"
+NPM_REGISTRY="${NPM_REGISTRY:-https://registry.npmmirror.com}"
+CLAUDE_INSTALL_LOG="/tmp/claude-install.log"
+
+case "$BACKEND" in
+    claude-code|claude)
+        if ! command -v claude &>/dev/null; then
+            echo "[entrypoint] Backend: claude-code — Installing Claude Code CLI v${CLAUDE_CODE_VERSION}..."
+            echo "[entrypoint] This only happens on first start. Gateway is starting in parallel."
+
+            # Install in background so gateway can start immediately
+            (
+                if [ "$(id -u)" = "0" ]; then
+                    npm install -g "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" \
+                        --registry="$NPM_REGISTRY" \
+                        --no-optional \
+                        --no-audit \
+                        --no-fund \
+                        --prefer-online \
+                    && npm cache clean --force 2>/dev/null
+                else
+                    npm install -g "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" \
+                        --registry="$NPM_REGISTRY" \
+                        --no-optional \
+                        --no-audit \
+                        --no-fund \
+                    && npm cache clean --force 2>/dev/null || true
+                fi
+                echo "[entrypoint] Claude Code CLI installed successfully." > "$CLAUDE_INSTALL_LOG"
+            ) &
+
+            export CLAUDE_INSTALL_PID=$!
+        else
+            echo "[entrypoint] Backend: claude-code — already installed."
+        fi
+        ;;
+    opencode)
+        if command -v opencode &>/dev/null; then
+            echo "[entrypoint] Backend: opencode — ready."
+        else
+            echo "[entrypoint] Backend: opencode — WARNING: opencode not found in image."
+            echo "[entrypoint] Falling back to claude-code."
+            BACKEND="claude-code"
+        fi
+        ;;
+    *)
+        echo "[entrypoint] WARNING: Unknown backend '$BACKEND'. Valid options: claude-code, opencode"
+        echo "[entrypoint] Falling back to claude-code."
+        BACKEND="claude-code"
+        ;;
+esac
+
+export BACKEND
+
 # Map generic env vars to Claude Code's native env vars
 export DISABLE_AUTOUPDATER=1
 if [ -n "$API_BASE_URL" ]; then
@@ -52,9 +110,14 @@ if [ "$1" = "remote" ]; then
     exec /usr/local/bin/onecode/start-remote.sh "$@"
 fi
 
-# CLI mode: direct claude interaction
+# CLI mode: start the selected backend
 if [ "$1" = "claude" ] || [ "$1" = "claude-code" ]; then
     exec gosu node "$@" --permission-mode bypassPermissions
+fi
+
+# If CMD is empty or default, start backend based on BACKEND env
+if [ "$1" = "opencode" ]; then
+    exec gosu node opencode
 fi
 
 # Default: run as node user

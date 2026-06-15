@@ -73,10 +73,20 @@ RUN pip3 install --no-cache-dir --break-system-packages \
     -r /tmp/requirements.txt \
     && rm /tmp/requirements.txt
 
-# Claude Code CLI (use npmmirror for China network)
-RUN npm install -g @anthropic-ai/claude-code@2.1.177 \
-    --registry=https://registry.npmmirror.com \
-    && npm cache clean --force
+# Claude Code CLI version (installed at runtime by entrypoint.sh, NOT pre-baked into the image)
+# This avoids redistribution of Anthropic's proprietary software in the Docker image.
+# Users install it themselves when the container starts, equivalent to running `npm install -g` on their own machine.
+ARG CLAUDE_CODE_VERSION=2.1.177
+
+# OpenCode CLI (MIT license — safe to pre-install in the image)
+# Alternative AI backend to Claude Code, supports multiple LLM providers.
+# https://github.com/opencode-ai/opencode
+ARG OPENCODE_VERSION=0.5.0
+RUN ARCH=$(dpkg --print-architecture) \
+    && gh_fetch "opencode-ai/opencode/releases/download/v${OPENCODE_VERSION}/opencode_${OPENCODE_VERSION}_linux_${ARCH}.tar.gz" - \
+    | tar xz -C /usr/local/bin \
+    && chmod +x /usr/local/bin/opencode \
+    && opencode --version 2>/dev/null || true
 
 # filebrowser - Web-based file manager
 RUN ARCH=$(dpkg --print-architecture) \
