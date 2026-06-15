@@ -63,25 +63,38 @@ load_config
 [ -n "$_env_model" ]    && MODEL="$_env_model"           || true
 
 # ── First-run setup & config resolution ─────────────────────────────
+# Known placeholder keys that indicate the user hasn't set a real key yet
+is_placeholder_key() {
+    case "${1:-}" in
+        ""|sk-test-key|sk-placeholder|sk-your-api-key|sk-xxx|sk-replace-me) return 0 ;;
+    esac
+    return 1
+}
+
 resolve_config() {
-    # If all three are set (via env or config file), we're good
-    if [ -n "${API_KEY:-}" ] && [ -n "${API_BASE_URL:-}" ] && [ -n "${MODEL:-}" ]; then
+    # If all three are set with real values, we're good
+    if [ -n "${API_KEY:-}" ] && ! is_placeholder_key "$API_KEY" \
+       && [ -n "${API_BASE_URL:-}" ] && [ -n "${MODEL:-}" ]; then
         export API_KEY API_BASE_URL MODEL
         return 0
     fi
 
-    # First run: no config file → interactive setup
-    if [ ! -f "$OC_CONFIG" ]; then
+    # First run or placeholder key: interactive setup
+    if [ ! -f "$OC_CONFIG" ] || is_placeholder_key "${API_KEY:-}"; then
         cat <<'WELCOME'
 
   ╔═══════════════════════════════════════════════╗
   ║          Welcome to OneCode! 🚀               ║
   ║                                               ║
-  ║  First run — let's configure your LLM API.   ║
+  ║  Let's configure your LLM API connection.     ║
   ║  Settings will be saved to ~/.onecode/        ║
   ╚═══════════════════════════════════════════════╝
 
 WELCOME
+        if is_placeholder_key "${API_KEY:-}"; then
+            echo "⚠  Current API key appears to be a placeholder. Please enter a real key."
+            echo ""
+        fi
     fi
 
     # API_BASE_URL
@@ -170,7 +183,7 @@ Commands:
   stop      Stop and remove a container
   update    Pull latest image and optionally restart containers
   ls        List oc containers and image
-  config    Show saved configuration
+  config    Show or update configuration (try: oc config set)
   help      Show help (this message, or help for a specific command)
 
 Global Options:
@@ -387,12 +400,14 @@ EOF
             ;;
         config)
             cat <<EOF
-oc config — Show saved configuration
+oc config — Show or update saved configuration
 
-Usage: oc config
+Usage: oc config [set KEY=VALUE ...]
 
 Displays the configuration stored in ~/.onecode/settings.json.
 The API_KEY is masked for security.
+
+With 'set', updates one or more config values interactively or directly.
 
 Configuration file: ~/.onecode/settings.json (permissions: 600)
 Contains: API_KEY, API_BASE_URL, MODEL
@@ -401,7 +416,9 @@ Priority: Environment variables > Config file > Defaults
 
 Examples:
   oc config                           # show current config
-  API_KEY=sk-xxx oc config            # env vars override config
+  oc config set                       # interactive setup (re-enter all)
+  oc config set API_KEY=sk-ant-xxx    # set API key directly
+  oc config set MODEL=claude-sonnet-4-6 API_BASE_URL=https://api.anthropic.com
 EOF
             ;;
         help)
@@ -695,12 +712,61 @@ cmd_ls() {
 }
 
 cmd_config() {
+    if [ "${1:-}" = "set" ]; then
+        shift
+        cmd_config_set "$@"
+        return
+    fi
     if [ -f "$OC_CONFIG" ]; then
         echo "Config: $OC_CONFIG"
         sed 's/\("API_KEY": *"\)[^"]*/\1****/' "$OC_CONFIG"
     else
         echo "No config file ($OC_CONFIG)"
     fi
+}
+
+cmd_config_set() {
+    # If key=value args provided, set them directly
+    if [ $# -gt 0 ]; then
+        for pair in "$@"; do
+            local key="${pair%%=*}"
+            local val="${pair#*=}"
+            case "$key" in
+                API_KEY)      API_KEY="$val" ;;
+                API_BASE_URL) API_BASE_URL="$val" ;;
+                MODEL)        MODEL="$val" ;;
+                *)            echo "Unknown key: $key (valid: API_KEY, API_BASE_URL, MODEL)" >&2; return 1 ;;
+            esac
+        done
+        save_config
+        echo "✓ Config saved to $OC_CONFIG"
+        return
+    fi
+
+    # Interactive mode: prompt for each field
+    echo "Current configuration:"
+    if [ -f "$OC_CONFIG" ]; then
+        sed 's/\("API_KEY": *"\)[^"]*/\1****/' "$OC_CONFIG"
+    else
+        echo "  (none)"
+    fi
+    echo ""
+    echo "Press Enter to keep current value, or type a new one."
+    echo ""
+
+    read -rp "API_BASE_URL [${API_BASE_URL:-https://api.anthropic.com}]: " new_url
+    API_BASE_URL="${new_url:-${API_BASE_URL:-https://api.anthropic.com}}"
+
+    read -rsp "API Key (input hidden) [current: ****]: " new_key
+    echo
+    [ -n "$new_key" ] && API_KEY="$new_key"
+
+    read -rp "MODEL [${MODEL:-claude-sonnet-4-6}]: " new_model
+    MODEL="${new_model:-${MODEL:-claude-sonnet-4-6}}"
+
+    save_config
+    echo ""
+    echo "✓ Config saved to $OC_CONFIG"
 }
 
 cmd_update() {
@@ -883,7 +949,7 @@ case "$COMMAND" in
     stop)   cmd_stop "$@" ;;
     update) cmd_update "$@" ;;
     ls)     cmd_ls ;;
-    config) cmd_config ;;
+    config) cmd_config "$@" ;;
     help)   show_help "$@" ;;
     *)      echo "Unknown command: $COMMAND" >&2; show_help ;;
 esac
