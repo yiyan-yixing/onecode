@@ -16,6 +16,22 @@ if [ "$(id -u)" = "0" ] && [ -d /workspace ]; then
     fi
 fi
 
+# Fix Docker socket permissions (host socket is owned by root:docker on host)
+# When -v /var/run/docker.sock is mounted, give node user access so
+# `docker build` works inside the container without sudo.
+if [ -S /var/run/docker.sock ]; then
+    DOCKER_GID=$(stat -c '%g' /var/run/docker.sock 2>/dev/null || true)
+    if [ -n "$DOCKER_GID" ] && [ "$(id -u)" = "0" ]; then
+        # Create/use group matching host docker GID, add node user
+        if ! getent group docker &>/dev/null || [ "$(getent group docker | cut -d: -f3)" != "$DOCKER_GID" ]; then
+            groupmod -g "$DOCKER_GID" docker 2>/dev/null || groupadd -g "$DOCKER_GID" docker 2>/dev/null || true
+        fi
+        usermod -aG docker node 2>/dev/null || true
+        chown root:docker /var/run/docker.sock 2>/dev/null || true
+        echo "[entrypoint] Docker socket mounted — node user added to docker group (GID $DOCKER_GID)"
+    fi
+fi
+
 # Install AI backend CLI at runtime (not pre-baked into the image)
 # This avoids redistribution of proprietary software.
 # OpenCode (MIT) is pre-installed in the image; Claude Code is installed on demand.

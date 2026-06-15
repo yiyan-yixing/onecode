@@ -432,6 +432,11 @@ build_docker_args() {
     local ssh_dir="${SSH_DIR:-$HOME/.ssh}"
     [ -d "$ssh_dir" ] && args+=(-v "$ssh_dir":/home/work/.ssh:ro)
 
+    # Mount host Docker socket if available (enables docker build inside container)
+    # Silently skipped if socket doesn't exist on host — zero user friction.
+    local docker_sock="/var/run/docker.sock"
+    [ -S "$docker_sock" ] && args+=(-v "$docker_sock":/var/run/docker.sock)
+
     if git config --global user.name &>/dev/null; then
         args+=(-e "GIT_AUTHOR_NAME=$(git config --global user.name)")
         args+=(-e "GIT_COMMITTER_NAME=$(git config --global user.name)")
