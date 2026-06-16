@@ -107,25 +107,30 @@
 
       // Track composition state
       var isComposing = false;
+      // Mark paste/composition handled by xterm to prevent duplicate sends
+      var skipInput = false;
+
       ta.addEventListener('compositionstart', function () {
         isComposing = true;
       }, true);
       ta.addEventListener('compositionend', function () {
         isComposing = false;
-        // Composition finished — send final composed text if xterm didn't
+        // xterm's compositionHelper delivers the final composed text via
+        // term.onData(), so we must NOT send it again here. Just clear the
+        // textarea and mark that input event should be skipped to avoid
+        // double-sending (the input event fires right after compositionend).
         var val = ta.value;
         if (val && val.length > 0) {
-          for (var i = 0; i < val.length; i++) {
-            var ch = val[i];
-            if (ch === '\n' || ch === '\r' || ch === '\t') {
-              continue;
-            }
-            if (ws && ws.readyState === 1) {
-              ws.send(ch);
-            }
-          }
+          skipInput = true;
           ta.value = '';
         }
+      }, true);
+
+      // Mark paste as handled by xterm — paste fires no keydown, so
+      // xtermHandled would stay false and the input handler would
+      // re-send the pasted content (double send bug).
+      ta.addEventListener('paste', function () {
+        skipInput = true;
       }, true);
 
       // During composition, stop xterm from processing keydown entirely.
@@ -153,8 +158,15 @@
           xtermHandled = true;
         }
       }, true);
-      ta.addEventListener('input', function () {
+      ta.addEventListener('input', function (e) {
         if (isComposing) {
+          xtermHandled = false;
+          return;
+        }
+        // Skip if this input was triggered by a paste or compositionend
+        // that xterm already handled — prevents double-sending.
+        if (skipInput) {
+          skipInput = false;
           xtermHandled = false;
           return;
         }
