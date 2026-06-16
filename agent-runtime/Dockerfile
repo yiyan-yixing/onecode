@@ -55,8 +55,9 @@ RUN install -m 0755 -d /etc/apt/keyrings \
     && apt-get install -y --no-install-recommends docker-ce-cli \
     && rm -rf /var/lib/apt/lists/*
 
-# GitHub mirror for China network (set to "" to use direct github.com)
-ARG GH_MIRROR=https://gh-proxy.com
+# GitHub mirror(s) for China network — comma-separated list tried in order by gh_fetch.
+# Set to "" to use direct github.com only. Override at build: --build-arg GH_MIRROR="https://my-mirror.com"
+ARG GH_MIRROR="https://ghfast.top,https://gh.llkk.cc,https://gh-proxy.com"
 
 # gh_fetch: download from GitHub with mirror fallback
 # Usage: gh_fetch <github_path> <output_path>

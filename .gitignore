@@ -36,3 +36,4 @@ yarn-error.log*
 agent-runtime/coder/*.tar.gz
 agent-runtime/extensions/*.vsix
 agent-runtime/settings.local.json
+.claude/settings.local.json
