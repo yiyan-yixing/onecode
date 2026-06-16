@@ -9,6 +9,89 @@ REPO_OWNER="yiyan-yixing"
 REPO_NAME="onecode"
 REPO_BRANCH="main"
 
+# ── Colors & Output ────────────────────────────────────────────────
+if [ -t 1 ]; then
+    RED=$'\033[0;31m'
+    GREEN=$'\033[0;32m'
+    YELLOW=$'\033[0;33m'
+    CYAN=$'\033[0;36m'
+    DIM=$'\033[2m'
+    BOLD=$'\033[1m'
+    NC=$'\033[0m'
+else
+    RED='' GREEN='' YELLOW='' CYAN='' DIM='' BOLD='' NC=''
+fi
+
+# ── Clack-style output (Vercel/Astro/SvelteKit CLI style) ──────────
+# Symbols: ◇ (step start)  │ (active)  └ (done)  ✓ ✗ ⚠
+clack_step()  { echo "  ${CYAN}◇${NC}  $*"; }
+clack_line()  { echo "  ${CYAN}│${NC}  $*"; }
+clack_ok()    { echo "  ${CYAN}└${NC}  ${GREEN}✓${NC} $*"; }
+clack_err()   { echo "  ${CYAN}└${NC}  ${RED}✗${NC} $*" >&2; }
+clack_warn()  { echo "  ${CYAN}└${NC}  ${YELLOW}⚠${NC} $*"; }
+clack_dim()   { echo "  ${CYAN}│${NC}  ${DIM}$*${NC}"; }
+
+# ── Spinner (braille animation with elapsed timer) ────────────────
+_SPINNER_PID=""
+_SPINNER_START=0
+spinner_start() {
+    _SPINNER_MSG="$1"
+    _SPINNER_START=$(date +%s)
+    local frames="⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+    local i=0
+    while true; do
+        local frame="${frames:$((i % 10)):1}"
+        local now
+        now=$(date +%s)
+        local elapsed=$((now - _SPINNER_START))
+        local timer=""
+        [ "$elapsed" -gt 0 ] && timer=" ${DIM}(${elapsed}s)${NC}"
+        printf "\r  ${CYAN}│${NC}  ${YELLOW}${frame}${NC} ${_SPINNER_MSG}${timer}  " >&2
+        i=$((i + 1))
+        sleep 0.12
+    done &
+    _SPINNER_PID=$!
+}
+spinner_stop() {
+    [ -n "$_SPINNER_PID" ] && kill "$_SPINNER_PID" 2>/dev/null || true
+    # Clear the spinner line
+    printf "\r%*s\r" 80 "" >&2
+    _SPINNER_PID=""
+    _SPINNER_START=0
+}
+# Ensure spinner is cleaned up on exit (even on error)
+trap 'spinner_stop' EXIT
+
+# Return elapsed seconds since spinner_start was called
+spinner_elapsed() {
+    [ "$_SPINNER_START" -gt 0 ] || { echo "0"; return; }
+    local now
+    now=$(date +%s)
+    echo "$((now - _SPINNER_START))"
+}
+
+# Poll until a command succeeds or timeout (seconds)
+# Returns 0 on success, 1 on timeout
+spin_until_cmd() {
+    local msg="$1" cmd="$2" timeout="${3:-60}"
+    local elapsed=0
+    local interval=2
+    spinner_start "$msg"
+    while [ "$elapsed" -lt "$timeout" ]; do
+        if eval "$cmd" &>/dev/null; then
+            local s
+            s=$(spinner_elapsed)
+            spinner_stop
+            echo "$s"
+            return 0
+        fi
+        sleep "$interval"
+        elapsed=$((elapsed + interval))
+    done
+    spinner_stop
+    return 1
+}
+
 # ── GitHub fetch helper ────────────────────────────────────────────
 # Robust download: mirror → GitHub API → direct raw → insecure fallback
 # GitHub API is preferred over raw.* because it uses a different CDN
@@ -820,13 +903,27 @@ cmd_run() {
     resolve_config
     build_docker_args
     args+=(--rm -it "$IMAGE" claude)
+    # Pull image if not cached (interactive run also needs the image)
+    if ! docker image inspect "$IMAGE" &>/dev/null; then
+        clack_step "Pulling image"
+        clack_dim "Image not found locally..."
+        docker pull "$IMAGE" 2>&1 || {
+            clack_err "Failed to pull image ${IMAGE}"
+            exit 1
+        }
+        clack_ok "Image pulled"
+    fi
     debug_cmd docker run "${args[@]}" "$@"
     exec docker run "${args[@]}" "$@"
 }
 
 cmd_remote() {
+    # ── Step 1: Resolve config ────────────────────────────────────────
+    clack_step "Resolving config"
     resolve_config
     build_docker_args
+    clack_ok "Config resolved (backend: ${backend:-claude-code})"
+
     # Port priority: CLI flag (-p) > settings.json > default
     local p="${PORT:-${gateway_port:-7681}}"
     local ap="${APP_PORT:-${app_port:-8000}}"
@@ -840,60 +937,98 @@ cmd_remote() {
     )
     [ -n "${TTYD_TOKEN:-}" ] && args+=(-e "TTYD_TOKEN=$TTYD_TOKEN")
     [ -n "${GATEWAY_HTTPS:-}" ] && args+=(-e "GATEWAY_HTTPS=$GATEWAY_HTTPS")
-    # Label the SSH port so cmd_stop can find the right socat process
     args+=(--label "oc.ssh_port=${sp}")
     args+=("$IMAGE" remote)
+
+    # ── Step 2: Pull image ───────────────────────────────────────────
+    clack_step "Preparing container image"
+    local pull_start=0
+    if ! docker image inspect "$IMAGE" &>/dev/null; then
+        clack_dim "Image not found locally, pulling..."
+        pull_start=$(date +%s)
+        if ! docker pull "$IMAGE" 2>&1; then
+            clack_err "Failed to pull image ${IMAGE}"
+            echo "  Try: docker pull ${IMAGE}" >&2
+            exit 1
+        fi
+        local pull_end
+        pull_end=$(date +%s)
+        clack_ok "Image pulled (${IMAGE}) ${DIM}($((pull_end - pull_start))s)${NC}"
+    else
+        clack_ok "Image cached (${IMAGE})"
+    fi
+
+    # ── Step 3: Start container ──────────────────────────────────────
+    clack_step "Starting container"
     debug_cmd docker run "${args[@]}"
-    # Capture the actual container name from docker run output
     local container_id
-    container_id=$(docker run "${args[@]}" 2>&1) || { echo "Error: failed to start container" >&2; echo "$container_id" >&2; exit 1; }
+    container_id=$(docker run "${args[@]}" 2>&1) || {
+        clack_err "Failed to start container"
+        echo "$container_id" >&2
+        exit 1
+    }
     # Validate: on success docker run outputs a 64-char hex container ID
     if [[ ! "$container_id" =~ ^[0-9a-f]{64}$ ]]; then
-        echo "Error: failed to start container" >&2
+        clack_err "Failed to start container"
         echo "$container_id" >&2
         exit 1
     fi
-    # Resolve to the actual container name to avoid timestamp drift
     debug_log "container_id: ${container_id}"
     local actual_name
     actual_name=$(docker inspect "$container_id" --format '{{.Name}}' 2>/dev/null | sed 's/^\///') || actual_name="${CONTAINER_NAME:-oc-$(basename "$(pwd)")}"
-    # Wait briefly and verify the container is actually running (not crashed after start)
-    sleep 2
+    clack_ok "Container started (${actual_name})"
+
+    # ── Step 4: Health check ─────────────────────────────────────────
+    clack_step "Waiting for services"
+    # Verify container is still running (not crashed after start)
     local container_state
     container_state=$(docker inspect "$container_id" --format '{{.State.Status}}' 2>/dev/null || echo "gone")
     if [ "$container_state" != "running" ]; then
-        echo "Error: container exited immediately (status: ${container_state})" >&2
+        clack_err "Container exited immediately (status: ${container_state})"
         local exit_code
         exit_code=$(docker inspect "$container_id" --format '{{.State.ExitCode}}' 2>/dev/null || echo "?")
-        echo "Exit code: ${exit_code}" >&2
-        echo "" >&2
-        echo "Container logs:" >&2
-        docker logs "$container_id" 2>&1 | tail -20 >&2
+        clack_line "Exit code: ${exit_code}"
+        clack_line "Container logs:"
+        docker logs "$container_id" 2>&1 | tail -20 | while IFS= read -r line; do
+            clack_dim "$line"
+        done
         exit 1
     fi
-    # Debug: show container logs after successful start
-    if [ "${OC_DEBUG:-}" = "1" ]; then
-        debug_log "container state: ${container_state}"
-        echo "[debug] container logs (last 20 lines):" >&2
-        docker logs "$container_id" 2>&1 | tail -20 >&2
+
+    # Poll gateway port until it responds (max 90s for first-time setup)
+    local health_s
+    if health_s=$(spin_until_cmd "Gateway starting on :${p}..." "curl -sf http://localhost:${p}/ -o /dev/null" 90); then
+        clack_ok "Gateway ready at :${p} ${DIM}(${health_s}s)${NC}"
+    else
+        # Gateway may still be starting; show warning
+        clack_warn "Gateway not responding yet (may still be initializing)"
+        if [ "${OC_DEBUG:-}" = "1" ]; then
+            docker logs "$container_id" 2>&1 | tail -10 | while IFS= read -r line; do
+                clack_dim "$line"
+            done
+        fi
     fi
+
+    # ── Done ────────────────────────────────────────────────────────
     local proto="http"
     [ "${GATEWAY_HTTPS:-0}" = "1" ] && proto="https"
     local display_backend="${backend:-claude-code}"
-    echo "OneCode running:"
-    echo "  Web:     ${proto}://localhost:${p}"
-    echo "  App:     ${proto}://localhost:${ap}  (AI-generated services)"
-    echo "  Backend: ${display_backend}"
+    echo ""
+    echo "  ${GREEN}${BOLD}OneCode running${NC}"
+    echo ""
+    echo "  Web:       ${proto}://localhost:${p}"
+    echo "  App:       ${proto}://localhost:${ap}  ${DIM}(AI-generated services)${NC}"
+    echo "  Backend:   ${display_backend}"
     echo "  Container: ${actual_name}"
     echo ""
     if [ "$display_backend" = "claude-code" ]; then
-        echo "  ⏳ First start: Claude Code CLI is installing in background (~30-60s)"
-        echo "  You can open the Web UI immediately — terminal will auto-start when ready."
+        echo "  ${DIM}First start: Claude Code CLI is installing in background (~30-60s)${NC}"
+        echo "  ${DIM}You can open the Web UI immediately — terminal will auto-start when ready.${NC}"
+        echo ""
     fi
-    echo ""
-    echo "  oc ssh ${actual_name}              # enable SSH"
-    echo "  oc shell ${actual_name}"
-    echo "  oc stop ${actual_name}"
+    echo "  ${DIM}oc ssh ${actual_name}              # enable SSH${NC}"
+    echo "  ${DIM}oc shell ${actual_name}            # enter container${NC}"
+    echo "  ${DIM}oc stop ${actual_name}             # stop container${NC}"
 }
 
 cmd_ssh() {
