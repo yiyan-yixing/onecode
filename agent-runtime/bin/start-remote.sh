@@ -2,7 +2,7 @@
 # Start remote mode: gateway (with PTY) + filebrowser + code-server
 set -eo pipefail
 
-GATEWAY_PORT="${TTYD_PORT:-7681}"  # TTYD_PORT is a legacy alias for GATEWAY_PORT
+GATEWAY_PORT="${GATEWAY_PORT:-${TTYD_PORT:-7681}}"  # Respect outer GATEWAY_PORT, fallback to TTYD_PORT
 FB_PORT=8081
 VSCODE_INTERNAL_PORT=8082
 TERM_TOKEN="${TTYD_TOKEN:-}"  # TTYD_TOKEN is a legacy alias for TERM_TOKEN

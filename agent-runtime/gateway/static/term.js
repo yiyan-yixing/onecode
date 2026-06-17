@@ -95,8 +95,14 @@
     'letter-spacing:0!important}';
   document.head.appendChild(s);
 
-  // Fix iOS system keyboard: composition + number/symbol input
-  (function fixIosInput() {
+  // Fix mobile IME input: composition + number/symbol keyboard
+  // Desktop browsers have working compositionHelper in xterm — don't interfere.
+  // Mac trackpad also triggers 'ontouchstart', so check screen width too.
+  var isTouchDevice = 'ontouchstart' in window && window.innerWidth < 1024;
+  (function fixMobileInput() {
+    if (!isTouchDevice) {
+      return;
+    }
     var ta = termEl.querySelector('.xterm-helper-textarea');
     if (ta) {
       ta.setAttribute('autocomplete', 'off');
@@ -134,7 +140,7 @@
       }, true);
 
       // During composition, stop xterm from processing keydown entirely.
-      // xterm's compositionHelper should handle the final text, but on iOS
+      // xterm's compositionHelper should handle the final text, but on mobile
       // it sometimes sends raw pinyin letters. Block all keydown events
       // while composing and rely on compositionend to deliver the result.
       ta.addEventListener('keydown', function (e) {
@@ -151,7 +157,7 @@
         }
       }, true);
 
-      // For non-composition input missed by xterm (iOS number/symbol keyboard)
+      // For non-composition input missed by xterm (mobile number/symbol keyboard)
       var xtermHandled = false;
       ta.addEventListener('keydown', function () {
         if (!isComposing) {
@@ -187,12 +193,12 @@
       }, true);
     } else {
       // Retry with back-off, but cap at 25 attempts (~5 seconds)
-      if (!ta && typeof fixIosInput._retry === 'undefined') {
-        fixIosInput._retry = 0;
+      if (!ta && typeof fixMobileInput._retry === 'undefined') {
+        fixMobileInput._retry = 0;
       }
-      if (fixIosInput._retry < 25) {
-        fixIosInput._retry++;
-        setTimeout(fixIosInput, 200);
+      if (fixMobileInput._retry < 25) {
+        fixMobileInput._retry++;
+        setTimeout(fixMobileInput, 200);
       }
     }
   })();
