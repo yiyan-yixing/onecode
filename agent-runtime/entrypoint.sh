@@ -47,37 +47,42 @@ BACKEND="${BACKEND:-claude-code}"
 CLAUDE_CODE_VERSION="${CLAUDE_CODE_VERSION:-2.1.177}"
 NPM_REGISTRY="${NPM_REGISTRY:-https://registry.npmmirror.com}"
 CLAUDE_INSTALL_LOG="/tmp/claude-install.log"
+# Claude Code install dir — bind-mounted from host ~/.local/share/onecode/claude-code/
+# so the download is cached across container restarts.
+CLAUDE_GLOBAL_DIR="/opt/claude-code"
 
 case "$BACKEND" in
     claude-code|claude)
-        if ! command -v claude &>/dev/null; then
+        if [ -x "$CLAUDE_GLOBAL_DIR/bin/claude" ]; then
+            # Already installed (cached in bind-mounted volume) — symlink and go
+            ln -sf "$CLAUDE_GLOBAL_DIR/bin/claude" /usr/local/bin/claude
+            echo "[entrypoint] Backend: claude-code — cached in volume, skipping install."
+            # Version mismatch hint (non-blocking)
+            if command -v node >/dev/null 2>&1; then
+                INSTALLED_VERSION=$(node -e "try{console.log(require('${CLAUDE_GLOBAL_DIR}/lib/node_modules/@anthropic-ai/claude-code/package.json').version)}catch(e){}" 2>/dev/null || echo "")
+                if [ -n "$INSTALLED_VERSION" ] && [ "$INSTALLED_VERSION" != "$CLAUDE_CODE_VERSION" ]; then
+                    echo "[entrypoint] NOTE: cached version ${INSTALLED_VERSION} != requested ${CLAUDE_CODE_VERSION}."
+                    echo "[entrypoint] To upgrade: rm -rf ~/.local/share/onecode/claude-code && restart."
+                fi
+            fi
+        else
             echo "[entrypoint] Backend: claude-code — Installing Claude Code CLI v${CLAUDE_CODE_VERSION}..."
             echo "[entrypoint] This only happens on first start. Gateway is starting in parallel."
 
             # Install in background so gateway can start immediately
             (
-                if [ "$(id -u)" = "0" ]; then
-                    npm install -g "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" \
-                        --registry="$NPM_REGISTRY" \
-                        --no-optional \
-                        --no-audit \
-                        --no-fund \
-                        --prefer-online \
-                    && npm cache clean --force 2>/dev/null
-                else
-                    npm install -g "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" \
-                        --registry="$NPM_REGISTRY" \
-                        --no-optional \
-                        --no-audit \
-                        --no-fund \
-                    && npm cache clean --force 2>/dev/null || true
-                fi
+                mkdir -p "$CLAUDE_GLOBAL_DIR"
+                npm install -g "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" \
+                    --prefix="$CLAUDE_GLOBAL_DIR" \
+                    --registry="$NPM_REGISTRY" \
+                    --no-optional \
+                    --no-audit \
+                    --no-fund
+                ln -sf "$CLAUDE_GLOBAL_DIR/bin/claude" /usr/local/bin/claude
                 echo "[entrypoint] Claude Code CLI installed successfully." > "$CLAUDE_INSTALL_LOG"
             ) &
 
             export CLAUDE_INSTALL_PID=$!
-        else
-            echo "[entrypoint] Backend: claude-code — already installed."
         fi
         ;;
     opencode)

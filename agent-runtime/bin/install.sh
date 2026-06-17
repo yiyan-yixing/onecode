@@ -547,6 +547,8 @@ provider_display() {
 
 configure() {
     mkdir -p "$OC_HOME"
+    # Pre-create Claude Code cache dir (bind-mounted into container at /opt/claude-code)
+    mkdir -p "${XDG_DATA_HOME:-$HOME/.local/share}/onecode/claude-code"
 
     # Migrate v1 config if present (read old fields, write v2 format)
     if [ -f "$OC_HOME/settings.json" ]; then

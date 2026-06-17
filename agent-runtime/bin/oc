@@ -531,6 +531,13 @@ build_docker_args() {
         args+=(-e "GIT_AUTHOR_EMAIL=$(git config --global user.email)")
         args+=(-e "GIT_COMMITTER_EMAIL=$(git config --global user.email)")
     fi
+
+    # Claude Code local cache — avoid re-downloading on every container start.
+    # Bind-mounted from host ~/.local/share/onecode/claude-code/ (XDG_DATA_HOME aware).
+    # Inside the container, entrypoint.sh installs to /opt/claude-code via --prefix.
+    local claude_cache_dir="${XDG_DATA_HOME:-$HOME/.local/share}/onecode/claude-code"
+    mkdir -p "$claude_cache_dir"
+    args+=(-v "$claude_cache_dir:/opt/claude-code")
 }
 
 # ── Help ──────────────────────────────────────────────────────────

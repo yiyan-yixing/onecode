@@ -93,6 +93,54 @@ else
     echo "FAIL entrypoint: expected 2.1.177, got $CLAUDE_CODE_VERSION"
 fi
 
+# ── Test: CLAUDE_GLOBAL_DIR default ─────────────────────────────────
+CLAUDE_GLOBAL_DIR="${CLAUDE_GLOBAL_DIR:-/opt/claude-code}"
+if [ "$CLAUDE_GLOBAL_DIR" = "/opt/claude-code" ]; then
+    echo "PASS entrypoint: CLAUDE_GLOBAL_DIR defaults to /opt/claude-code"
+else
+    echo "FAIL entrypoint: expected /opt/claude-code, got $CLAUDE_GLOBAL_DIR"
+fi
+
+# ── Test: cached install detection (bin/claude exists) ──────────────
+# Simulate: when /opt/claude-code/bin/claude exists, install should be skipped
+CLAUDE_GLOBAL_DIR="/opt/claude-code"
+MOCK_CLAUDE_BIN="/tmp/test_claude_bin_$$"
+mkdir -p "$MOCK_CLAUDE_BIN/bin"
+touch "$MOCK_CLAUDE_BIN/bin/claude"
+chmod +x "$MOCK_CLAUDE_BIN/bin/claude"
+# Test the -x check logic
+if [ -x "$MOCK_CLAUDE_BIN/bin/claude" ]; then
+    echo "PASS entrypoint: cached claude binary detected via -x check"
+else
+    echo "FAIL entrypoint: -x check failed on mock claude binary"
+fi
+rm -rf "$MOCK_CLAUDE_BIN"
+
+# ── Test: missing install detection (bin/claude absent) ──────────────
+MOCK_EMPTY_DIR="/tmp/test_claude_empty_$$"
+mkdir -p "$MOCK_EMPTY_DIR"
+if [ ! -x "$MOCK_EMPTY_DIR/bin/claude" ]; then
+    echo "PASS entrypoint: missing claude binary correctly not detected"
+else
+    echo "FAIL entrypoint: -x check should fail for missing binary"
+fi
+rm -rf "$MOCK_EMPTY_DIR"
+
+# ── Test: symlink creation logic ────────────────────────────────────
+MOCK_CLAUDE_DIR="/tmp/test_claude_symlink_$$"
+mkdir -p "$MOCK_CLAUDE_DIR/bin"
+touch "$MOCK_CLAUDE_DIR/bin/claude"
+chmod +x "$MOCK_CLAUDE_DIR/bin/claude"
+MOCK_USR_LOCAL_BIN="/tmp/test_usr_local_bin_$$"
+mkdir -p "$MOCK_USR_LOCAL_BIN"
+ln -sf "$MOCK_CLAUDE_DIR/bin/claude" "$MOCK_USR_LOCAL_BIN/claude"
+if [ -L "$MOCK_USR_LOCAL_BIN/claude" ] && [ "$(readlink "$MOCK_USR_LOCAL_BIN/claude")" = "$MOCK_CLAUDE_DIR/bin/claude" ]; then
+    echo "PASS entrypoint: symlink created correctly to cached claude"
+else
+    echo "FAIL entrypoint: symlink creation failed"
+fi
+rm -rf "$MOCK_CLAUDE_DIR" "$MOCK_USR_LOCAL_BIN"
+
 # ── Test: NPM_REGISTRY default ─────────────────────────────────────
 NPM_REGISTRY="${NPM_REGISTRY:-https://registry.npmmirror.com}"
 if [ "$NPM_REGISTRY" = "https://registry.npmmirror.com" ]; then
