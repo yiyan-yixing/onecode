@@ -224,8 +224,9 @@ ENV TZ="Asia/Shanghai" \
 RUN sed -i '/zh_CN.UTF-8/s/^# //g' /etc/locale.gen && locale-gen
 
 # Agent runtime config (mapped to Claude Code env vars in entrypoint.sh)
+# NOTE: API_KEY is intentionally NOT declared here — pass at runtime via
+# `docker run -e API_KEY=xxx` to avoid persisting secrets into image layers.
 ENV API_BASE_URL="https://api.anthropic.com" \
-    API_KEY="" \
     MODEL="claude-sonnet-4-6"
 
 # App port: pre-reserved port for AI-generated services
