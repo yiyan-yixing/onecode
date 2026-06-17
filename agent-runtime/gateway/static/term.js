@@ -95,6 +95,31 @@
     'letter-spacing:0!important}';
   document.head.appendChild(s);
 
+  // Fix desktop CJK IME: clear helper textarea after paste
+  // xterm reads clipboardData on paste and sends via term.onData(), but leaves
+  // the pasted text in textarea.value. When the next IME compositionend fires,
+  // xterm's compositionHelper reads textarea.value and sends the old paste +
+  // new composed text together — causing duplicated input.
+  (function fixDesktopPaste() {
+    var ta = termEl.querySelector('.xterm-helper-textarea');
+    if (!ta) {
+      // Retry with back-off
+      if (typeof fixDesktopPaste._retry === 'undefined') fixDesktopPaste._retry = 0;
+      if (fixDesktopPaste._retry < 15) {
+        fixDesktopPaste._retry++;
+        setTimeout(fixDesktopPaste, 200);
+      }
+      return;
+    }
+    ta.addEventListener('paste', function () {
+      // Clear textarea after xterm has processed the paste event.
+      // Use requestAnimationFrame to ensure xterm's own paste handler runs first.
+      requestAnimationFrame(function () {
+        ta.value = '';
+      });
+    });
+  })();
+
   // Fix mobile IME input: composition + number/symbol keyboard
   // Desktop browsers have working compositionHelper in xterm — don't interfere.
   // Mac trackpad also triggers 'ontouchstart', so check screen width too.
