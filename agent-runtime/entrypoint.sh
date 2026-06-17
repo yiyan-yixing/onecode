@@ -130,8 +130,10 @@ if [ -n "$MODEL" ]; then
     export ANTHROPIC_MODEL="$MODEL"
 fi
 
-# Start SSH server (for VS Code Remote-SSH)
-source /usr/local/bin/onecode/start-sshd.sh
+# Start SSH server (optional — requires ENABLE_SSH=1)
+if [ "${ENABLE_SSH:-0}" = "1" ]; then
+    source /usr/local/bin/onecode/start-sshd.sh
+fi
 
 # Web terminal mode: gateway + filebrowser
 if [ "$1" = "remote" ]; then

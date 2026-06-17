@@ -234,7 +234,7 @@ ENV API_BASE_URL="https://api.anthropic.com" \
 ENV APP_PORT=8000
 
 # Web terminal port + SSH port + App service port
-EXPOSE 7681 8222 8000
+EXPOSE 7681 8000
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
     CMD node -e "var m=process.env.GATEWAY_HTTPS==='1'?'https':'http';require(m).get(m+'://localhost:7681/',function(r){process.exit(r.statusCode<400?0:1)}).on('error',function(){process.exit(1)})"

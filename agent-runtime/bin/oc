@@ -568,7 +568,7 @@ Global Options:
   -d DIR        Local directory to mount (default: current directory)
   -p PORT       Web terminal port (remote mode, default: 7681)
   -a PORT       App service port (AI-generated services, default: 8000)
-  -s PORT       SSH port (ssh command, default: 8222)
+  -s PORT       SSH port (optional, enables SSH server in container)
   --backend NAME  AI backend: claude-code (default) or opencode
   --tag TAG     Image tag (default: latest, prefers local image)
   --https       Enable HTTPS on gateway (self-signed cert, for direct non-localhost access)
@@ -624,7 +624,7 @@ Usage: oc remote [options]
 
 Starts a container in detached mode with a web-based terminal (ttyd).
 Open the printed URL in your browser to interact with Claude Code.
-SSH is NOT enabled by default — use 'oc ssh <name>' separately.
+SSH is disabled by default. Use -s PORT to enable (or ENABLE_SSH=1 env var).
 
 Options (global):
   -n NAME     Container name
@@ -850,7 +850,7 @@ EOF
 COMMAND=""
 PORT=""
 APP_PORT=""
-SSH_PORT="8222"
+SSH_PORT=""
 GATEWAY_HTTPS=""
 OC_DEBUG=""
 OC_BACKEND=""
@@ -948,7 +948,6 @@ cmd_remote() {
     # Port priority: CLI flag (-p) > settings.json > default
     local p="${PORT:-${gateway_port:-7681}}"
     local ap="${APP_PORT:-${app_port:-8000}}"
-    local sp="${SSH_PORT:-${ssh_port:-8222}}"
     args+=(
         -d
         -p "${p}:7681"
@@ -958,7 +957,12 @@ cmd_remote() {
     )
     [ -n "${TTYD_TOKEN:-}" ] && args+=(-e "TTYD_TOKEN=$TTYD_TOKEN")
     [ -n "${GATEWAY_HTTPS:-}" ] && args+=(-e "GATEWAY_HTTPS=$GATEWAY_HTTPS")
-    args+=(--label "oc.ssh_port=${sp}")
+    # SSH: only expose when -s PORT is explicitly provided
+    if [ -n "${SSH_PORT:-}" ]; then
+        local sp="${SSH_PORT}"
+        args+=(-p "${sp}:8222" -e "ENABLE_SSH=1")
+        args+=(--label "oc.ssh_port=${sp}")
+    fi
     args+=("$IMAGE" remote)
 
     # ── Step 2: Pull image ───────────────────────────────────────────
@@ -1047,14 +1051,18 @@ cmd_remote() {
         echo "  ${DIM}You can open the Web UI immediately — terminal will auto-start when ready.${NC}"
         echo ""
     fi
-    echo "  ${DIM}oc ssh ${actual_name}              # enable SSH${NC}"
     echo "  ${DIM}oc shell ${actual_name}            # enter container${NC}"
     echo "  ${DIM}oc stop ${actual_name}             # stop container${NC}"
+    if [ -n "${SSH_PORT:-}" ]; then
+        echo "  ${DIM}oc ssh ${actual_name}              # enable SSH${NC}"
+    fi
 }
 
 cmd_ssh() {
     if [ -z "${1:-}" ]; then
         echo "Usage: oc ssh <name> [public-key] [-s PORT]" >&2
+        echo "" >&2
+        echo "  Note: SSH is disabled by default. Start container with -s PORT or ENABLE_SSH=1." >&2
         echo "" >&2
         echo "  oc ssh my-agent                           # auto-detect key from ~/.ssh/*.pub" >&2
         echo "  oc ssh my-agent -s 2222                   # use custom port" >&2
