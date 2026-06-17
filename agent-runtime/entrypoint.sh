@@ -23,9 +23,11 @@ if [ -S /var/run/docker.sock ]; then
     DOCKER_GID=$(stat -c '%g' /var/run/docker.sock 2>/dev/null || true)
     if [ -n "$DOCKER_GID" ] && [ "$(id -u)" = "0" ]; then
         if [ "$DOCKER_GID" = "0" ]; then
-            # Socket owned by root:root — add node to root group for access
-            usermod -aG root node 2>/dev/null || true
-            echo "[entrypoint] Docker socket mounted (root:root) — node user added to root group"
+            # Socket owned by root:root — chmod is more reliable than usermod+gosu
+            # because usermod may fail silently and gosu may not preserve supplemental
+            # groups in all environments. chmod 666 is safe for a local dev container.
+            chmod 666 /var/run/docker.sock 2>/dev/null || true
+            echo "[entrypoint] Docker socket mounted (root:root) — chmod 666 for node user access"
         else
             # Socket owned by root:docker — create docker group matching host GID
             if ! getent group docker &>/dev/null || [ "$(getent group docker | cut -d: -f3)" != "$DOCKER_GID" ]; then

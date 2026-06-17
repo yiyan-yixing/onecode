@@ -2,6 +2,7 @@
 set -euo pipefail
 
 IMAGE_REPO="ghcr.io/yiyan-yixing/onecode"
+LOCAL_IMAGE="onecode"       # local image name (e.g. onecode:0.5.0)
 IMAGE="${AGENT_RUNTIME_IMAGE:-${IMAGE_REPO}:latest}"
 IMAGE_TAG=""
 OC_VERSION="0.4.0"
@@ -517,6 +518,8 @@ build_docker_args() {
 
     # Mount host Docker socket if available (enables docker build inside container)
     # Silently skipped if socket doesn't exist on host — zero user friction.
+    # Socket access for the node user is handled in entrypoint.sh (chmod 666
+    # when socket is root:root; usermod+chown when root:docker).
     local docker_sock="/var/run/docker.sock"
     [ -S "$docker_sock" ] && args+=(-v "$docker_sock":/var/run/docker.sock)
 
@@ -560,7 +563,7 @@ Global Options:
   -a PORT       App service port (AI-generated services, default: 8000)
   -s PORT       SSH port (ssh command, default: 8222)
   --backend NAME  AI backend: claude-code (default) or opencode
-  --tag TAG     Image tag (default: latest)
+  --tag TAG     Image tag (default: latest, prefers local image)
   --https       Enable HTTPS on gateway (self-signed cert, for direct non-localhost access)
   --debug       Show full docker commands and container logs for troubleshooting
   -v, --version Show version
@@ -570,6 +573,7 @@ Quick Start:
   oc                                    # interactive CLI (claude-code backend)
   oc remote                             # web terminal at http://localhost:7681
   oc --backend opencode remote          # web terminal with OpenCode backend
+  oc --tag 0.5.0 remote              # use tag 0.5.0 (prefers local image)
   oc --https remote                     # HTTPS with self-signed cert
   oc ssh <name>                         # enable SSH on running container
 
@@ -883,8 +887,18 @@ while [ $# -gt 0 ]; do
     esac
 done
 
-# Apply image tag override
-[ -n "$IMAGE_TAG" ] && IMAGE="${IMAGE_REPO}:${IMAGE_TAG}"
+# Image resolution: local-first strategy
+# --tag 0.5.0 → check onecode:0.5.0 (local) first, then remote
+# No tag → check onecode:latest (local) first, then remote
+# AGENT_RUNTIME_IMAGE → used as-is (user has full control)
+if [ -z "${AGENT_RUNTIME_IMAGE:-}" ]; then
+    _tag="${IMAGE_TAG:-latest}"
+    if docker image inspect "${LOCAL_IMAGE}:${_tag}" &>/dev/null; then
+        IMAGE="${LOCAL_IMAGE}:${_tag}"
+    else
+        IMAGE="${IMAGE_REPO}:${_tag}"
+    fi
+fi
 
 # ── Debug helper ───────────────────────────────────────────────────
 debug_log() {
