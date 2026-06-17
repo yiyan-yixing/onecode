@@ -264,6 +264,7 @@ html,body{font-size:15px;-webkit-text-size-adjust:100%;-webkit-tap-highlight-col
       <div class="brand">
         <div class="brand-logo">OC</div>
         <span class="brand-name">OneCode</span>
+        <span id="ocname" style="display:none;font-size:12px;font-weight:500;color:var(--tx3);margin-left:3px"></span>
         <span class="brand-sub">AI 原生 IDE</span>
       </div>
       <span class="l" style="flex:none;margin-left:4px">Terminal <span id="ver" style="font-weight:500;font-size:9px;color:var(--ac);background:var(--ac-d);padding:1px 6px;border-radius:10px;vertical-align:middle;margin-left:4px;border:1px solid rgba(16,185,129,.12)"></span></span>
@@ -376,6 +377,7 @@ html,body{font-size:15px;-webkit-text-size-adjust:100%;-webkit-tap-highlight-col
 (function(){
 var cfg={{CONFIG}},API='/files/api',tk='';
 if(cfg.version)document.getElementById('ver').textContent='v'+cfg.version;
+if(cfg.ocName){document.getElementById('ocname').textContent=cfg.ocName;document.getElementById('ocname').style.display='';document.title='OneCode · '+cfg.ocName}
 
 /* ── Agent Roles Data ── */
 var agentRoles=[];
