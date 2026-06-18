@@ -95,37 +95,46 @@
     'letter-spacing:0!important}';
   document.head.appendChild(s);
 
-  // Fix desktop CJK IME: stale textarea data + Tab key during composition
+  // Fix CJK IME input: stale textarea + commit-key leak.
   //
-  // Problem 1 — stale textarea: xterm's compositionHelper reads textarea.value
-  // on compositionend but never clears it. After paste or a prior composition,
-  // the old text lingers. The next compositionend sends old + new text together.
+  // Problem 1 — stale textarea: xterm's CompositionHelper reads
+  // textarea.value on compositionend but never clears it. After paste or a
+  // prior composition, the old text lingers. The next compositionend sends
+  // old + new text together.
   // Fix: clear textarea after compositionend and paste via requestAnimationFrame
   // (after xterm has already read the value).
   //
-  // Problem 2 — Tab during composition: xterm's keydown handler does NOT check
-  // event.isComposing. When Tab is pressed during IME composition:
-  //   - xterm calls _finalizeComposition(false), sending raw pinyin (e.g. "ta")
-  //   - Chrome fires compositionend before the Tab keydown, so xterm sees Tab
-  //     with isComposing=false and processes it as a regular key
-  //   - Result: terminal receives "ta" + Tab character → garbled output "ta btab"
-  // Fix: block Tab keydown during composition and right after compositionend
-  // (using a justEnded flag, cleared after the current event-loop tick).
-  (function fixDesktopIME() {
+  // Problem 2 — commit-key leak: Chinese/Japanese/Korean IME commits
+  // composition when the user presses Space, Enter, a number, or Tab.
+  // Chrome fires compositionend BEFORE the keydown for the committing key,
+  // so xterm's keydown handler sees the key with _isComposing=false and
+  // processes it as a regular keystroke. Result: the terminal receives both
+  // the composed text AND the committing key (e.g. "你 " instead of "你").
+  // Fix: block keydown events right after compositionend (using a justEnded
+  // flag cleared via setTimeout(0)).
+  //
+  // CRITICAL: do NOT block keydown during composition (isComposing).
+  // During CJK composition, all keydown events carry keyCode 229 and are
+  // already ignored by xterm's handler. Calling preventDefault() on these
+  // events can interfere with the IME on some browsers (especially Safari),
+  // preventing the candidate window from appearing or the composition from
+  // completing. Only the commit-key after compositionend needs blocking.
+  (function fixIME() {
     var ta = termEl.querySelector('.xterm-helper-textarea');
     if (!ta) {
-      if (typeof fixDesktopIME._retry === 'undefined') fixDesktopIME._retry = 0;
-      if (fixDesktopIME._retry < 15) {
-        fixDesktopIME._retry++;
-        setTimeout(fixDesktopIME, 200);
+      if (typeof fixIME._retry === 'undefined') fixIME._retry = 0;
+      if (fixIME._retry < 15) {
+        fixIME._retry++;
+        setTimeout(fixIME, 200);
       }
       return;
     }
     var isComposing = false;
     // Set on compositionend; cleared after the current event-loop tick.
-    // Prevents the key that ended the composition (e.g. Tab) from being
+    // Prevents the commit key (Space, Enter, number, Tab) from being
     // processed by xterm — Chrome fires compositionend before keydown,
-    // so xterm would see the key with isComposing=false.
+    // so xterm would see the key with isComposing=false and send it as a
+    // regular keystroke alongside the composed text.
     var justEnded = false;
 
     ta.addEventListener('compositionstart', function () {
@@ -136,8 +145,8 @@
     ta.addEventListener('compositionend', function () {
       isComposing = false;
       justEnded = true;
-      // Clear justEnded after the current event-loop tick — the keydown for
-      // the key that ended the composition fires in the same tick.
+      // Clear justEnded after the current event-loop tick — the keydown
+      // for the commit key fires in the same tick.
       setTimeout(function () { justEnded = false; }, 0);
       // Clear textarea after xterm's compositionHelper has read it.
       // requestAnimationFrame ensures xterm's handler runs first.
@@ -157,24 +166,39 @@
       });
     });
 
-    ta.addEventListener('keydown', function (e) {
-      if (isComposing || justEnded) {
-        // Block Tab during/after composition — Tab is used for IME
-        // candidate navigation and must NOT reach xterm's keydown handler
-        // (which would call _finalizeComposition(false) + process Tab).
-        if (e.key === 'Tab') {
-          e.preventDefault();
-          e.stopImmediatePropagation();
-          justEnded = false;
-        }
+    // Block the commit key after compositionend to prevent double input.
+    // Register on the PARENT element (.xterm) in capture phase so our
+    // handler fires BEFORE xterm's textarea keydown handler.
+    // IMPORTANT: we do NOT block keydown during composition — xterm already
+    // ignores keyCode 229, and preventDefault() during composition can
+    // break the IME on some browsers.
+    termEl.addEventListener('keydown', function (e) {
+      // Only intercept keys that target the textarea (IME input focus)
+      if (e.target !== ta) {
+        return;
+      }
+      if (justEnded) {
+        // Block the commit key's keydown after compositionend.
+        // In Chrome, compositionend fires before the commit key's keydown.
+        // Without this, xterm would process the commit key (Space, Enter,
+        // number, Tab) as a regular keystroke, sending it alongside the
+        // composed text (e.g., "你 " instead of "你").
+        e.preventDefault();
+        e.stopImmediatePropagation();
       }
     }, true);
   })();
 
-  // Fix mobile IME input: composition + number/symbol keyboard
-  // Desktop browsers have working compositionHelper in xterm — don't interfere.
-  // Mac trackpad also triggers 'ontouchstart', so check screen width too.
-  var isTouchDevice = 'ontouchstart' in window && window.innerWidth < 1024;
+  // Fix mobile IME input: number/symbol keyboard + duplicate send prevention
+  // The fixIME handler above only blocks the commit key after compositionend.
+  // This mobile-specific fix handles:
+  // 1. Non-composition input from number/symbol keyboards (xterm misses these)
+  // 2. skipInput flag to prevent double-sending via the input event
+  // Use matchMedia(pointer:coarse) for reliable touch detection; fall back to
+  // ontouchstart+width for older browsers. Avoid false positives on desktop
+  // touch-enabled laptops (which have fine pointer = mouse/trackpad).
+  var isTouchDevice = (window.matchMedia && window.matchMedia('(pointer: coarse)').matches) ||
+      ('ontouchstart' in window && window.innerWidth < 1024);
   (function fixMobileInput() {
     if (!isTouchDevice) {
       return;
@@ -198,13 +222,17 @@
       ta.addEventListener('compositionend', function () {
         isComposing = false;
         // xterm's compositionHelper delivers the final composed text via
-        // term.onData(), so we must NOT send it again here. Just clear the
-        // textarea and mark that input event should be skipped to avoid
-        // double-sending (the input event fires right after compositionend).
+        // term.onData(), so we must NOT send it again. Just mark that
+        // the input event should be skipped to avoid double-sending
+        // (the input event fires right after compositionend).
+        // IMPORTANT: Do NOT clear ta.value here! This handler runs in the
+        // capture phase, BEFORE xterm's bubble-phase compositionend handler
+        // which reads ta.value. Clearing here would destroy the composed
+        // Chinese text before xterm can read it. The unified fixIME's
+        // requestAnimationFrame will clear the textarea after xterm reads it.
         var val = ta.value;
         if (val && val.length > 0) {
           skipInput = true;
-          ta.value = '';
         }
       }, true);
 
@@ -213,24 +241,6 @@
       // re-send the pasted content (double send bug).
       ta.addEventListener('paste', function () {
         skipInput = true;
-      }, true);
-
-      // During composition, stop xterm from processing keydown entirely.
-      // xterm's compositionHelper should handle the final text, but on mobile
-      // it sometimes sends raw pinyin letters. Block all keydown events
-      // while composing and rely on compositionend to deliver the result.
-      ta.addEventListener('keydown', function (e) {
-        if (isComposing) {
-          e.stopImmediatePropagation();
-          // For non-printable keys (backspace, enter, arrows) during composition,
-          // let the IME handle them but don't let xterm see them
-          var k = e.key;
-          if (k === 'Backspace' || k === 'Enter' || k === 'Escape' ||
-              k.startsWith('Arrow') || k === 'Delete') {
-            // These keys may commit the composition — let them through to browser
-            // but still block xterm
-          }
-        }
       }, true);
 
       // For non-composition input missed by xterm (mobile number/symbol keyboard)
@@ -269,7 +279,7 @@
       }, true);
     } else {
       // Retry with back-off, but cap at 25 attempts (~5 seconds)
-      if (!ta && typeof fixMobileInput._retry === 'undefined') {
+      if (typeof fixMobileInput._retry === 'undefined') {
         fixMobileInput._retry = 0;
       }
       if (fixMobileInput._retry < 25) {
