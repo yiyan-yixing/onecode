@@ -12,7 +12,7 @@ TEST_APORT:= 9002
 
 # ── build: 本地打镜像 ────────────────────────────────────────────────
 build:
-	docker buildx build --platform $(PLATFORM) -t $(IMAGE):$(VERSION) -t $(IMAGE):latest --load agent-runtime/
+	docker build --platform $(PLATFORM) -t $(IMAGE):$(VERSION) -t $(IMAGE):latest agent-runtime/
 
 # ── test: 启动测试环境 ──────────────────────────────────────────────
 test:

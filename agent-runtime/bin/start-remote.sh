@@ -56,7 +56,7 @@ CHILD_PIDS="$CHILD_PIDS $!"
 
 # Start gateway (main process — now includes terminal server + PTY)
 # Run in background so EXIT trap can clean up sibling processes on termination
-export GATEWAY_PORT FB_PORT VSCODE_INTERNAL_PORT TERM_TOKEN CHILD_PIDS
+export GATEWAY_PORT FB_PORT VSCODE_INTERNAL_PORT TERM_TOKEN OC_NAME CHILD_PIDS
 gosu node node /usr/local/share/gateway/index.js &
 GATEWAY_PID=$!
 CHILD_PIDS="$CHILD_PIDS $GATEWAY_PID"
