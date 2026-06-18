@@ -95,29 +95,80 @@
     'letter-spacing:0!important}';
   document.head.appendChild(s);
 
-  // Fix desktop CJK IME: clear helper textarea after paste
-  // xterm reads clipboardData on paste and sends via term.onData(), but leaves
-  // the pasted text in textarea.value. When the next IME compositionend fires,
-  // xterm's compositionHelper reads textarea.value and sends the old paste +
-  // new composed text together — causing duplicated input.
-  (function fixDesktopPaste() {
+  // Fix desktop CJK IME: stale textarea data + Tab key during composition
+  //
+  // Problem 1 — stale textarea: xterm's compositionHelper reads textarea.value
+  // on compositionend but never clears it. After paste or a prior composition,
+  // the old text lingers. The next compositionend sends old + new text together.
+  // Fix: clear textarea after compositionend and paste via requestAnimationFrame
+  // (after xterm has already read the value).
+  //
+  // Problem 2 — Tab during composition: xterm's keydown handler does NOT check
+  // event.isComposing. When Tab is pressed during IME composition:
+  //   - xterm calls _finalizeComposition(false), sending raw pinyin (e.g. "ta")
+  //   - Chrome fires compositionend before the Tab keydown, so xterm sees Tab
+  //     with isComposing=false and processes it as a regular key
+  //   - Result: terminal receives "ta" + Tab character → garbled output "ta btab"
+  // Fix: block Tab keydown during composition and right after compositionend
+  // (using a justEnded flag, cleared after the current event-loop tick).
+  (function fixDesktopIME() {
     var ta = termEl.querySelector('.xterm-helper-textarea');
     if (!ta) {
-      // Retry with back-off
-      if (typeof fixDesktopPaste._retry === 'undefined') fixDesktopPaste._retry = 0;
-      if (fixDesktopPaste._retry < 15) {
-        fixDesktopPaste._retry++;
-        setTimeout(fixDesktopPaste, 200);
+      if (typeof fixDesktopIME._retry === 'undefined') fixDesktopIME._retry = 0;
+      if (fixDesktopIME._retry < 15) {
+        fixDesktopIME._retry++;
+        setTimeout(fixDesktopIME, 200);
       }
       return;
     }
-    ta.addEventListener('paste', function () {
-      // Clear textarea after xterm has processed the paste event.
-      // Use requestAnimationFrame to ensure xterm's own paste handler runs first.
+    var isComposing = false;
+    // Set on compositionend; cleared after the current event-loop tick.
+    // Prevents the key that ended the composition (e.g. Tab) from being
+    // processed by xterm — Chrome fires compositionend before keydown,
+    // so xterm would see the key with isComposing=false.
+    var justEnded = false;
+
+    ta.addEventListener('compositionstart', function () {
+      isComposing = true;
+      justEnded = false;
+    }, true);
+
+    ta.addEventListener('compositionend', function () {
+      isComposing = false;
+      justEnded = true;
+      // Clear justEnded after the current event-loop tick — the keydown for
+      // the key that ended the composition fires in the same tick.
+      setTimeout(function () { justEnded = false; }, 0);
+      // Clear textarea after xterm's compositionHelper has read it.
+      // requestAnimationFrame ensures xterm's handler runs first.
       requestAnimationFrame(function () {
-        ta.value = '';
+        if (!isComposing) {
+          ta.value = '';
+        }
+      });
+    }, true);
+
+    ta.addEventListener('paste', function () {
+      // Clear textarea after xterm has processed the paste.
+      requestAnimationFrame(function () {
+        if (!isComposing) {
+          ta.value = '';
+        }
       });
     });
+
+    ta.addEventListener('keydown', function (e) {
+      if (isComposing || justEnded) {
+        // Block Tab during/after composition — Tab is used for IME
+        // candidate navigation and must NOT reach xterm's keydown handler
+        // (which would call _finalizeComposition(false) + process Tab).
+        if (e.key === 'Tab') {
+          e.preventDefault();
+          e.stopImmediatePropagation();
+          justEnded = false;
+        }
+      }
+    }, true);
   })();
 
   // Fix mobile IME input: composition + number/symbol keyboard
