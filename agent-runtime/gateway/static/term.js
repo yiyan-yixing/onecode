@@ -82,10 +82,15 @@
   }
 
   // Prevent overscroll bounce on mobile but allow normal scroll
+  // On desktop, xterm's Viewport uses native scrollTop for scrolling, so
+  // touch-action must be 'auto' for trackpad/touch scrolling to work.
+  // On mobile, we handle touch scroll ourselves via touch events, so
+  // touch-action:none prevents the browser from also trying to scroll.
   var s = document.createElement('style');
   s.textContent =
     '.xterm-viewport{overscroll-behavior:none!important;' +
-    'scrollbar-width:none!important;touch-action:none!important}' +
+    'scrollbar-width:none!important}' +
+    '@media(pointer:coarse){.xterm-viewport{touch-action:none!important}}' +
     '.xterm-viewport::-webkit-scrollbar{display:none!important}' +
     '.xterm-helpers{position:absolute!important;opacity:0}' +
     '.xterm{-webkit-font-smoothing:antialiased!important;' +
@@ -678,41 +683,22 @@
     }
   });
 
-  // PC: wheel scroll via xterm API (bypasses mouse tracking mode)
-  // Mobile: touch scroll via viewport.scrollTop (native browser redraw, no canvas overlap)
-  // Touch events don't trigger mouse tracking mode, so viewport scroll is safe on mobile
+  // Scroll handling:
+  // - Desktop: let xterm handle wheel natively via its Viewport (scrollTop-based).
+  //   xterm already supports smooth scroll, mouse tracking mode (sends wheel
+  //   as mouse events to PTY for less/vim/tmux), and overscroll bounce.
+  //   Our previous custom wheel handler broke all of this by calling
+  //   preventDefault() + stopImmediatePropagation(), which:
+  //   (a) blocked xterm's native wheel → scrollTop scroll
+  //   (b) blocked mouse tracking mode (wheel events should go to PTY, not scrollLines)
+  //   (c) broke smooth scroll (bypassed xterm's animation)
+  // - Mobile: touch scroll via viewport.scrollTop (native browser redraw, no canvas overlap)
   var isMobile = 'ontouchstart' in window && window.innerWidth < 768;
   var hasTouch = 'ontouchstart' in window;
   // Update isMobile on resize so scroll behavior adapts to orientation changes / docking
   window.addEventListener('resize', function () {
     isMobile = hasTouch && window.innerWidth < 768;
   });
-
-  // Always register wheel handler — only act when not on mobile
-  termEl.addEventListener('wheel', function (e) {
-    if (isMobile) {
-      return;
-    }
-    e.preventDefault();
-    e.stopImmediatePropagation();
-    var delta = e.deltaY;
-    if (delta === 0) {
-      return;
-    }
-    var lines = Math.round(Math.abs(delta) / 40);
-    lines = Math.max(1, Math.min(lines, 20));
-    if (delta > 0) {
-      try {
-        term.scrollLines(lines);
-      } catch (_) {}
-    } else {
-      try {
-        term.scrollLines(-lines);
-      } catch (_) {}
-    }
-    userScrolled = !isAtBottom();
-    updateScrollThumb();
-  }, { passive: false, capture: true });
 
   // Always register touch scroll handlers — only act on mobile
   if (hasTouch) {
