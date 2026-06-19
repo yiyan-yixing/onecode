@@ -86,11 +86,11 @@ else
 fi
 
 # ── Test: CLAUDE_CODE_VERSION default ──────────────────────────────
-CLAUDE_CODE_VERSION="${CLAUDE_CODE_VERSION:-2.1.177}"
-if [ "$CLAUDE_CODE_VERSION" = "2.1.177" ]; then
-    echo "PASS entrypoint: CLAUDE_CODE_VERSION defaults to 2.1.177"
+CLAUDE_CODE_VERSION="${CLAUDE_CODE_VERSION:-2.1.183}"
+if [ "$CLAUDE_CODE_VERSION" = "2.1.183" ]; then
+    echo "PASS entrypoint: CLAUDE_CODE_VERSION defaults to 2.1.183"
 else
-    echo "FAIL entrypoint: expected 2.1.177, got $CLAUDE_CODE_VERSION"
+    echo "FAIL entrypoint: expected 2.1.183, got $CLAUDE_CODE_VERSION"
 fi
 
 # ── Test: CLAUDE_GLOBAL_DIR default ─────────────────────────────────
@@ -224,3 +224,41 @@ if [ "$SHOULD_EXEC" = "true" ]; then
 else
     echo "FAIL entrypoint: claude CLI mode not detected"
 fi
+
+# ── Test: ver_compare semver comparison ─────────────────────────────
+# Extract ver_compare from entrypoint.sh
+ver_compare() {
+    local a="$1" b="$2"
+    local pa pb
+    pa=$(echo "$a" | sed 's/\./ /g' | awk '{printf "%03d%03d%03d",$1,$2,$3}')
+    pb=$(echo "$b" | sed 's/\./ /g' | awk '{printf "%03d%03d%03d",$1,$2,$3}')
+    if [ "$pa" \> "$pb" ]; then echo "gt"
+    elif [ "$pa" = "$pb" ]; then echo "eq"
+    else echo "lt"
+    fi
+}
+
+# gt: 2.1.183 > 2.1.177
+R=$(ver_compare "2.1.183" "2.1.177")
+if [ "$R" = "gt" ]; then echo "PASS entrypoint: ver_compare 2.1.183 > 2.1.177 → gt"
+else echo "FAIL entrypoint: ver_compare 2.1.183 > 2.1.177 expected gt, got $R"; fi
+
+# lt: 2.1.177 < 2.1.183
+R=$(ver_compare "2.1.177" "2.1.183")
+if [ "$R" = "lt" ]; then echo "PASS entrypoint: ver_compare 2.1.177 < 2.1.183 → lt"
+else echo "FAIL entrypoint: ver_compare 2.1.177 < 2.1.183 expected lt, got $R"; fi
+
+# eq: 2.1.183 = 2.1.183
+R=$(ver_compare "2.1.183" "2.1.183")
+if [ "$R" = "eq" ]; then echo "PASS entrypoint: ver_compare 2.1.183 = 2.1.183 → eq"
+else echo "FAIL entrypoint: ver_compare 2.1.183 = 2.1.183 expected eq, got $R"; fi
+
+# cross-segment: 2.2.0 > 2.1.999
+R=$(ver_compare "2.2.0" "2.1.999")
+if [ "$R" = "gt" ]; then echo "PASS entrypoint: ver_compare 2.2.0 > 2.1.999 → gt"
+else echo "FAIL entrypoint: ver_compare 2.2.0 > 2.1.999 expected gt, got $R"; fi
+
+# major bump: 3.0.0 > 2.99.99
+R=$(ver_compare "3.0.0" "2.99.99")
+if [ "$R" = "gt" ]; then echo "PASS entrypoint: ver_compare 3.0.0 > 2.99.99 → gt"
+else echo "FAIL entrypoint: ver_compare 3.0.0 > 2.99.99 expected gt, got $R"; fi

@@ -317,7 +317,7 @@ module.exports = function (t) {
 | case claude 别名 | 匹配到 claude-code |
 | case opencode | 匹配 |
 | 未知 backend | 回退到 claude-code |
-| CLAUDE_CODE_VERSION | 默认 2.1.177 |
+| CLAUDE_CODE_VERSION | 默认 2.1.183 |
 | NPM_REGISTRY | 默认 npmmirror |
 | API_BASE_URL → ANTHROPIC_BASE_URL | 映射正确 |
 | API_KEY → ANTHROPIC_API_KEY | 映射正确 |

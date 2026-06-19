@@ -90,7 +90,7 @@ RUN pip3 install --no-cache-dir --break-system-packages \
 # Claude Code CLI version (installed at runtime by entrypoint.sh, NOT pre-baked into the image)
 # This avoids redistribution of Anthropic's proprietary software in the Docker image.
 # Users install it themselves when the container starts, equivalent to running `npm install -g` on their own machine.
-ARG CLAUDE_CODE_VERSION=2.1.177
+ARG CLAUDE_CODE_VERSION=2.1.183
 
 # OpenCode CLI (MIT license — safe to pre-install in the image)
 # Alternative AI backend to Claude Code, supports multiple LLM providers.

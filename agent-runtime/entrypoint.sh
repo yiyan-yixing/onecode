@@ -44,26 +44,65 @@ fi
 # This avoids redistribution of proprietary software.
 # OpenCode (MIT) is pre-installed in the image; Claude Code is installed on demand.
 BACKEND="${BACKEND:-claude-code}"
-CLAUDE_CODE_VERSION="${CLAUDE_CODE_VERSION:-2.1.177}"
+CLAUDE_CODE_VERSION="${CLAUDE_CODE_VERSION:-2.1.183}"
 NPM_REGISTRY="${NPM_REGISTRY:-https://registry.npmmirror.com}"
 CLAUDE_INSTALL_LOG="/tmp/claude-install.log"
 # Claude Code install dir — bind-mounted from host ~/.local/share/onecode/claude-code/
 # so the download is cached across container restarts.
 CLAUDE_GLOBAL_DIR="/opt/claude-code"
 
+# ── Semver comparison: returns "gt" | "eq" | "lt" ──────────────────
+# Usage: ver_compare "2.1.183" "2.1.177" → "gt" (first > second)
+ver_compare() {
+    local a="$1" b="$2"
+    # Pad each segment to 3 digits so sort can compare numerically
+    local pa pb
+    pa=$(echo "$a" | sed 's/\./ /g' | awk '{printf "%03d%03d%03d",$1,$2,$3}')
+    pb=$(echo "$b" | sed './ /g' | awk '{printf "%03d%03d%03d",$1,$2,$3}')
+    if [ "$pa" \> "$pb" ]; then echo "gt"
+    elif [ "$pa" = "$pb" ]; then echo "eq"
+    else echo "lt"
+    fi
+}
+
 case "$BACKEND" in
     claude-code|claude)
         if [ -x "$CLAUDE_GLOBAL_DIR/bin/claude" ]; then
-            # Already installed (cached in bind-mounted volume) — symlink and go
+            # Already installed (cached in bind-mounted volume)
             ln -sf "$CLAUDE_GLOBAL_DIR/bin/claude" /usr/local/bin/claude
-            echo "[entrypoint] Backend: claude-code — cached in volume, skipping install."
-            # Version mismatch hint (non-blocking)
+
+            # Smart version check: user version takes priority if higher
+            INSTALLED_VERSION=""
             if command -v node >/dev/null 2>&1; then
                 INSTALLED_VERSION=$(node -e "try{console.log(require('${CLAUDE_GLOBAL_DIR}/lib/node_modules/@anthropic-ai/claude-code/package.json').version)}catch(e){}" 2>/dev/null || echo "")
-                if [ -n "$INSTALLED_VERSION" ] && [ "$INSTALLED_VERSION" != "$CLAUDE_CODE_VERSION" ]; then
-                    echo "[entrypoint] NOTE: cached version ${INSTALLED_VERSION} != requested ${CLAUDE_CODE_VERSION}."
-                    echo "[entrypoint] To upgrade: rm -rf ~/.local/share/onecode/claude-code && restart."
-                fi
+            fi
+
+            if [ -n "$INSTALLED_VERSION" ]; then
+                CMP=$(ver_compare "$INSTALLED_VERSION" "$CLAUDE_CODE_VERSION")
+                case "$CMP" in
+                    gt)
+                        echo "[entrypoint] Backend: claude-code — cached v${INSTALLED_VERSION} > requested v${CLAUDE_CODE_VERSION}. Keeping user version."
+                        ;;
+                    eq)
+                        echo "[entrypoint] Backend: claude-code — cached v${INSTALLED_VERSION} matches requested. Skipping install."
+                        ;;
+                    lt)
+                        echo "[entrypoint] Backend: claude-code — cached v${INSTALLED_VERSION} < requested v${CLAUDE_CODE_VERSION}. Upgrading..."
+                        (
+                            npm install -g "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" \
+                                --prefix="$CLAUDE_GLOBAL_DIR" \
+                                --registry="$NPM_REGISTRY" \
+                                --no-optional \
+                                --no-audit \
+                                --no-fund
+                            ln -sf "$CLAUDE_GLOBAL_DIR/bin/claude" /usr/local/bin/claude
+                            echo "[entrypoint] Claude Code upgraded to v${CLAUDE_CODE_VERSION}." > "$CLAUDE_INSTALL_LOG"
+                        ) &
+                        export CLAUDE_INSTALL_PID=$!
+                        ;;
+                esac
+            else
+                echo "[entrypoint] Backend: claude-code — cached in volume, skipping install."
             fi
         else
             echo "[entrypoint] Backend: claude-code — Installing Claude Code CLI v${CLAUDE_CODE_VERSION}..."
