@@ -144,6 +144,11 @@ export BACKEND
 
 # Map generic env vars to Claude Code's native env vars
 export DISABLE_AUTOUPDATER=1
+
+# Auto-compaction: compress conversation when 80% of 200K token window is reached
+export CLAUDE_CODE_AUTO_COMPACT_WINDOW="200000"
+export CLAUDE_AUTOCOMPACT_PCT_OVERRIDE="80"
+
 if [ -n "$API_BASE_URL" ]; then
     export ANTHROPIC_BASE_URL="$API_BASE_URL"
 fi
