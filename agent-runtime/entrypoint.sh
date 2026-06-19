@@ -58,7 +58,7 @@ ver_compare() {
     # Pad each segment to 3 digits so sort can compare numerically
     local pa pb
     pa=$(echo "$a" | sed 's/\./ /g' | awk '{printf "%03d%03d%03d",$1,$2,$3}')
-    pb=$(echo "$b" | sed './ /g' | awk '{printf "%03d%03d%03d",$1,$2,$3}')
+    pb=$(echo "$b" | sed 's/\./ /g' | awk '{printf "%03d%03d%03d",$1,$2,$3}')
     if [ "$pa" \> "$pb" ]; then echo "gt"
     elif [ "$pa" = "$pb" ]; then echo "eq"
     else echo "lt"

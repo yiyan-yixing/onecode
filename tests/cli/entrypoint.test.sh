@@ -226,17 +226,11 @@ else
 fi
 
 # ── Test: ver_compare semver comparison ─────────────────────────────
-# Extract ver_compare from entrypoint.sh
-ver_compare() {
-    local a="$1" b="$2"
-    local pa pb
-    pa=$(echo "$a" | sed 's/\./ /g' | awk '{printf "%03d%03d%03d",$1,$2,$3}')
-    pb=$(echo "$b" | sed 's/\./ /g' | awk '{printf "%03d%03d%03d",$1,$2,$3}')
-    if [ "$pa" \> "$pb" ]; then echo "gt"
-    elif [ "$pa" = "$pb" ]; then echo "eq"
-    else echo "lt"
-    fi
-}
+# IMPORTANT: extract ver_compare from the real entrypoint.sh, do NOT hand-copy it.
+# A hand-copied copy silently drifted from the source (sed './ /g' bug) and passed
+# here while the real entrypoint shipped the bug. Extracting binds test to source.
+ENTRYPOINT_SRC="$(dirname "${BASH_SOURCE[0]:-$0}")/../../agent-runtime/entrypoint.sh"
+eval "$(sed -n '/^ver_compare()/,/^}/p' "$ENTRYPOINT_SRC")"
 
 # gt: 2.1.183 > 2.1.177
 R=$(ver_compare "2.1.183" "2.1.177")
