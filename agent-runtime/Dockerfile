@@ -3,7 +3,7 @@ FROM node:24-slim
 # Use Tsinghua mirror for apt (faster in China)
 RUN sed -i 's|deb.debian.org|mirrors.tuna.tsinghua.edu.cn|g' /etc/apt/sources.list.d/debian.sources
 
-# System dependencies
+# System dependencies (runtime + Tauri v2 desktop build)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     git \
     git-lfs \
@@ -40,6 +40,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libxshmfence1 \
     libpango-1.0-0 \
     libcairo2 \
+    \
+    `# ── Tauri v2 desktop build deps ──` \
+    build-essential \
+    file \
+    libwebkit2gtk-4.1-dev \
+    libgtk-3-dev \
+    libssl-dev \
+    libxdo-dev \
+    libayatana-appindicator3-dev \
+    librsvg2-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # Docker CLI — enables `docker build` inside container via host's Docker daemon
@@ -86,6 +96,17 @@ RUN pip3 install --no-cache-dir --break-system-packages \
     --trusted-host pypi.tuna.tsinghua.edu.cn \
     -r /tmp/requirements.txt \
     && rm /tmp/requirements.txt
+
+# Rust toolchain (user-level install via rustup — no root needed at runtime)
+# Enables `make build` for OneCode Desktop (Tauri v2) inside the container.
+# Tauri system deps (webkit2gtk-4.1-dev etc.) are installed above.
+ARG RUST_VERSION=1.85.0
+ENV RUSTUP_HOME=/usr/local/share/rust \
+    CARGO_HOME=/usr/local/share/rust
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- \
+        -y --default-toolchain "$RUST_VERSION" --profile minimal \
+    && chmod -R a+rX /usr/local/share/rust \
+    && rustc --version && cargo --version
 
 # Claude Code CLI version (installed at runtime by entrypoint.sh, NOT pre-baked into the image)
 # This avoids redistribution of Anthropic's proprietary software in the Docker image.
@@ -215,7 +236,7 @@ RUN chmod +x /usr/local/bin/onecode/*.sh
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh
 
-ENV PATH="/usr/local/bin:$PATH"
+ENV PATH="/usr/local/bin:/usr/local/share/rust/bin:$PATH"
 
 ENV TZ="Asia/Shanghai" \
     LANG="zh_CN.UTF-8"
