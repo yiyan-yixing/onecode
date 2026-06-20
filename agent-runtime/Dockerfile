@@ -102,7 +102,8 @@ RUN pip3 install --no-cache-dir --break-system-packages \
 # Tauri system deps (webkit2gtk-4.1-dev etc.) are installed above.
 ARG RUST_VERSION=1.85.0
 ENV RUSTUP_HOME=/usr/local/share/rust \
-    CARGO_HOME=/usr/local/share/rust
+    CARGO_HOME=/usr/local/share/rust \
+    PATH="/usr/local/share/rust/bin:$PATH"
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- \
         -y --default-toolchain "$RUST_VERSION" --profile minimal \
     && chmod -R a+rX /usr/local/share/rust \
