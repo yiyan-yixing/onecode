@@ -101,13 +101,19 @@ RUN pip3 install --no-cache-dir --break-system-packages \
 # Enables `make build` for OneCode Desktop (Tauri v2) inside the container.
 # Tauri system deps (webkit2gtk-4.1-dev etc.) are installed above.
 ARG RUST_VERSION=1.96.0
+# Runtime: CARGO_HOME points to user-writable dir for registry/cache/config.
+# RUSTUP_HOME stays at the shared toolchain location (read-only for users is fine).
+# During build: rustup installs cargo into RUSTUP_HOME, so we temporarily set
+# CARGO_HOME=RUSTUP_HOME, then switch for runtime.
 ENV RUSTUP_HOME=/usr/local/share/rust \
-    CARGO_HOME=/usr/local/share/rust \
-    PATH="/usr/local/share/rust/bin:$PATH"
-RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- \
+    CARGO_HOME=/home/work/.cargo \
+    PATH="/usr/local/share/rust/bin:/home/work/.cargo/bin:$PATH"
+RUN CARGO_HOME=/usr/local/share/rust \
+    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- \
         -y --default-toolchain "$RUST_VERSION" --profile minimal \
     && chmod -R a+rX /usr/local/share/rust \
-    && rustc --version && cargo --version
+    && /usr/local/share/rust/bin/rustc --version \
+    && /usr/local/share/rust/bin/cargo --version
 
 # Claude Code CLI version (installed at runtime by entrypoint.sh, NOT pre-baked into the image)
 # This avoids redistribution of Anthropic's proprietary software in the Docker image.
@@ -202,7 +208,8 @@ SSHD
 RUN usermod -d /home/work node \
     && mkdir -p /home/work \
     && echo '{"hasCompletedOnboarding":true,"projects":{"/workspace":{"hasTrustDialogAccepted":true,"bypassPermissionsModeAccepted":true}}}' > /home/work/.claude.json \
-    && chown -R node:node /home/work /home/work/.claude.json
+    && mkdir -p /home/work/.cargo \
+    && chown -R node:node /home/work /home/work/.claude.json /home/work/.cargo
 
 # Bash color support and common aliases
 RUN echo 'export TERM=xterm-256color' >> /home/work/.bashrc \
@@ -237,7 +244,7 @@ RUN chmod +x /usr/local/bin/onecode/*.sh
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh
 
-ENV PATH="/usr/local/bin:/usr/local/share/rust/bin:$PATH"
+ENV PATH="/usr/local/bin:/usr/local/share/rust/bin:/home/work/.cargo/bin:$PATH"
 
 ENV TZ="Asia/Shanghai" \
     LANG="zh_CN.UTF-8"
