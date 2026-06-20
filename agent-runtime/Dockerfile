@@ -103,13 +103,14 @@ RUN pip3 install --no-cache-dir --break-system-packages \
 ARG RUST_VERSION=1.96.0
 # Runtime: CARGO_HOME points to user-writable dir for registry/cache/config.
 # RUSTUP_HOME stays at the shared toolchain location (read-only for users is fine).
-# During build: rustup installs cargo into RUSTUP_HOME, so we temporarily set
-# CARGO_HOME=RUSTUP_HOME, then switch for runtime.
+# During build: we export CARGO_HOME=RUSTUP_HOME so rustup installs the cargo
+# proxy into the shared toolchain dir; at runtime CARGO_HOME=/home/work/.cargo
+# lets the node user write registry cache and cargo install binaries.
 ENV RUSTUP_HOME=/usr/local/share/rust \
     CARGO_HOME=/home/work/.cargo \
     PATH="/usr/local/share/rust/bin:/home/work/.cargo/bin:$PATH"
-RUN CARGO_HOME=/usr/local/share/rust \
-    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- \
+RUN export CARGO_HOME=/usr/local/share/rust \
+    && curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- \
         -y --default-toolchain "$RUST_VERSION" --profile minimal \
     && chmod -R a+rX /usr/local/share/rust \
     && /usr/local/share/rust/bin/rustc --version \
