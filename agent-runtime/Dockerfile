@@ -100,7 +100,7 @@ RUN pip3 install --no-cache-dir --break-system-packages \
 # Rust toolchain (user-level install via rustup — no root needed at runtime)
 # Enables `make build` for OneCode Desktop (Tauri v2) inside the container.
 # Tauri system deps (webkit2gtk-4.1-dev etc.) are installed above.
-ARG RUST_VERSION=1.85.0
+ARG RUST_VERSION=1.96.0
 ENV RUSTUP_HOME=/usr/local/share/rust \
     CARGO_HOME=/usr/local/share/rust \
     PATH="/usr/local/share/rust/bin:$PATH"
