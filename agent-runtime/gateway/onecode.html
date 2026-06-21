@@ -857,7 +857,9 @@ document.addEventListener('keydown',function(e){
 });
 
 /* virtual keyboard */
-var vkSeq={esc:'\x1b',tab:'\t',ctrlc:'\x03',bs:'\x7f',up:'\x1b[A',down:'\x1b[B',left:'\x1b[D',right:'\x1b[C',enter:'\r'};
+// Tab on virtual keyboard acts as Enter (submit), same as physical Tab key.
+// When mention popup is open, Tab selects popup item instead of submitting.
+var vkSeq={esc:'\x1b',tab:'\r',ctrlc:'\x03',bs:'\x7f',up:'\x1b[A',down:'\x1b[B',left:'\x1b[D',right:'\x1b[C',enter:'\r'};
 function vkSend(data){
   if(window.termWs&&window.termWs.readyState===1){window.termWs.send(data)}
   else if(window.term){window.term._core._coreService.triggerDataEvent(data)}
@@ -866,7 +868,22 @@ document.querySelectorAll('.vk').forEach(function(vk){
   vk.addEventListener('touchstart',function(e){
     var b=e.target.closest('.vk-k');if(!b)return;
     e.preventDefault();
-    var k=b.dataset.k,data=vkSeq[k]||k;
+    var k=b.dataset.k;
+    // Virtual Tab: check mention popup state before sending Enter
+    if(k==='tab'){
+      var mp=document.getElementById('mentionPop');
+      if(mp&&mp.classList.contains('on')){
+        // Mention popup open — select first/current item instead of submitting
+        var items=mp.querySelectorAll('.mp-item');
+        if(items.length>0){
+          var idx=mentionIdx>=0&&mentionIdx<items.length?mentionIdx:0;
+          items[idx].click();
+        }
+        b.style.background='var(--ac)';b.style.color='#fff';
+        return;
+      }
+    }
+    var data=vkSeq[k]||k;
     b.style.background='var(--ac)';b.style.color='#fff';
     vkSend(data);
   },{passive:false});
@@ -877,7 +894,19 @@ document.querySelectorAll('.vk').forEach(function(vk){
   vk.addEventListener('click',function(e){
     if(mob)return;
     var b=e.target.closest('.vk-k');if(!b)return;
-    var k=b.dataset.k,data=vkSeq[k]||k;
+    var k=b.dataset.k;
+    if(k==='tab'){
+      var mp=document.getElementById('mentionPop');
+      if(mp&&mp.classList.contains('on')){
+        var items=mp.querySelectorAll('.mp-item');
+        if(items.length>0){
+          var idx=mentionIdx>=0&&mentionIdx<items.length?mentionIdx:0;
+          items[idx].click();
+        }
+        return;
+      }
+    }
+    var data=vkSeq[k]||k;
     vkSend(data);
   });
 });

@@ -65,6 +65,121 @@
 
   fitAddon.fit();
 
+  // IME stale-text fix: moved to document-level capture phase (see below).
+  // The old fixImeCancelKeys monkey-patch was fragile (often couldn't find
+  // CompositionHelper) and only covered Tab/Escape. The new fix blocks
+  // ALL non-229 keyCodes during composition at the document level,
+  // preventing _finalizeComposition(false) from ever firing.
+
+  // ═══════════════════════════════════════════════════════════════
+  // TAB=ENTER + IME stale-text fix
+  //
+  // Root cause (from debug logs):
+  //   During IME composition, ANY non-229 keyCode (not just Tab/Escape)
+  //   causes xterm's CompositionHelper._finalizeComposition(false) to
+  //   synchronously read textarea.value and send stale preedit text
+  //   ("wo men" with syllable separators) to the terminal.
+  //   Then compositionend fires and _finalizeComposition(true) sends
+  //   the correct "women" → result: "wo menwomen" (duplicate + stale).
+  //
+  // Fix: intercept ALL non-229 keydowns during composition at document
+  // capture phase. This runs before xterm's textarea capture handler
+  // (registered during term.open()), preventing _finalizeComposition(false)
+  // from ever firing. The IME still processes the key at OS level and
+  // commits via compositionend, which xterm handles correctly.
+  //
+  // Outside composition: Tab key sends '\r' (Enter/submit).
+  // ═══════════════════════════════════════════════════════════════
+  (function fixImeStaleText() {
+    var isComposing = false;
+    var pendingTabEnter = 0; // counter: how many Tab presses during composition
+
+    document.addEventListener('compositionstart', function (e) {
+      if (e.target.closest && e.target.closest('#term')) {
+        isComposing = true;
+      }
+    }, true);
+
+    document.addEventListener('compositionend', function (e) {
+      if (e.target.closest && e.target.closest('#term')) {
+        isComposing = false;
+        if (pendingTabEnter > 0) {
+          var count = pendingTabEnter;
+          pendingTabEnter = 0;
+          // Send Enter AFTER xterm's compositionend handler.
+          // xterm uses setTimeout(0) in _finalizeComposition(true),
+          // so we delay 50ms. If textarea still has content (slow device),
+          // retry once more after another 50ms.
+          setTimeout(function () {
+            var ta = document.querySelector('#term .xterm-helper-textarea');
+            if (ta && ta.value !== '') {
+              // textarea not cleared yet — xterm hasn't processed compositionend
+              setTimeout(function () {
+                for (var i = 0; i < count; i++) {
+                  if (ws && ws.readyState === 1) { ws.send('\r'); }
+                }
+              }, 50);
+            } else {
+              for (var i = 0; i < count; i++) {
+                if (ws && ws.readyState === 1) { ws.send('\r'); }
+              }
+            }
+          }, 50);
+        }
+      }
+    }, true);
+
+    // Safety: reset IME state on blur to prevent isComposing getting
+    // stuck true when compositionend doesn't fire (e.g. Alt+Tab away,
+    // click outside terminal, IME crash). Without this, ALL keyboard
+    // input to the terminal would be permanently blocked.
+    document.addEventListener('blur', function (e) {
+      if (e.target.closest && e.target.closest('#term')) {
+        isComposing = false;
+        pendingTabEnter = 0;
+      }
+    }, true);
+
+    document.addEventListener('keydown', function (e) {
+      if (!e.target.closest || !e.target.closest('#term')) return;
+
+      // During IME composition: block ALL non-229, non-modifier keydowns.
+      // keyCode 229 = IME processing key (safe, xterm ignores these).
+      // keyCode 16/17/18 = Shift/Ctrl/Alt modifiers (safe, xterm ignores).
+      // ALL other keyCodes cause _finalizeComposition(false) → stale text.
+      // Also check e.isComposing (modern API) as fallback.
+      if ((isComposing || e.isComposing) && e.keyCode !== 229 &&
+          e.keyCode !== 16 && e.keyCode !== 17 && e.keyCode !== 18) {
+        e.stopImmediatePropagation();
+        // Do NOT preventDefault — the IME needs the key at browser level
+        // to properly cancel/commit composition. The IME processes the key
+        // at OS level BEFORE browser keydown fires, so our interception
+        // doesn't affect IME behavior, only blocks xterm's stale read.
+        if (e.keyCode === 9) { // Tab specifically → send Enter after
+          pendingTabEnter++;
+        }
+        return;
+      }
+
+      // Outside composition: Tab = Enter (submit)
+      if (e.key === 'Tab' || e.keyCode === 9) {
+        var mp = document.getElementById('mentionPop');
+        if (mp && mp.classList.contains('on')) {
+          // Mention popup open — let onecode.html handle Tab for popup nav,
+          // but block xterm from also seeing Tab (prevent \t leak)
+          e.stopImmediatePropagation();
+          return;
+        }
+
+        e.preventDefault();
+        e.stopPropagation();
+        e.stopImmediatePropagation();
+
+        if (ws && ws.readyState === 1) { ws.send('\r'); }
+      }
+    }, true); // document capture phase — absolute highest priority
+  })();
+
   // Auto-fit when terminal element becomes visible or resizes (e.g. mobile tab switch)
   if (typeof ResizeObserver !== 'undefined') {
     var roTimer = null;
@@ -100,87 +215,30 @@
     'letter-spacing:0!important}';
   document.head.appendChild(s);
 
-  // Fix desktop CJK IME: clear helper textarea after paste + Tab during composition
+  // Fix desktop CJK IME: clear helper textarea after paste
+  // xterm reads clipboardData on paste and sends via term.onData(), but leaves
+  // the pasted text in textarea.value. When the next IME compositionend fires,
+  // xterm's compositionHelper reads textarea.value and sends the old paste +
+  // new composed text together — causing duplicated input.
   //
-  // Problem 1: xterm leaves pasted text in textarea.value. Next compositionend
-  // reads textarea and sends old paste + new composed text together (duplicate).
-  // Fix: clear textarea after paste via requestAnimationFrame.
-  //
-  // Problem 2: Tab during IME composition causes Chrome to fire compositionend
-  // (cancelling IME, leaking raw pinyin) then Tab keydown. xterm's
-  // _finalizeComposition reads textarea.value and sends raw pinyin, then Tab
-  // sends \t, then the input event re-reads the still-populated textarea.value
-  // and sends the pinyin again. Result: "wo\tmenwomen" instead of "women".
-  //
-  // Fix: track composition state on desktop. When Tab is pressed during or
-  // right after composition (within 50ms grace), preventDefault + stop the
-  // Tab from reaching xterm. The forced compositionend will send the raw
-  // pinyin (which is the desired output for Tab — same as Enter behavior
-  // but without the \r). Then clear textarea.value to prevent the subsequent
-  // input event from re-sending the pinyin.
-  (function fixDesktopIME() {
+  // On desktop, xterm's built-in CompositionHelper handles CJK IME correctly
+  // (with the fixImeCancelKeys patch above for Tab/Escape cancellation).
+  // Do NOT add any compositionstart/compositionend/keydown interception on
+  // desktop — it will break CJK input by racing with xterm's internal
+  // setTimeout(0) read or blocking the commit key (Space/Enter).
+  (function fixDesktopPaste() {
     var ta = termEl.querySelector('.xterm-helper-textarea');
     if (!ta) {
-      if (typeof fixDesktopIME._retry === 'undefined') fixDesktopIME._retry = 0;
-      if (fixDesktopIME._retry < 15) {
-        fixDesktopIME._retry++;
-        setTimeout(fixDesktopIME, 200);
+      if (typeof fixDesktopPaste._retry === 'undefined') fixDesktopPaste._retry = 0;
+      if (fixDesktopPaste._retry < 15) {
+        fixDesktopPaste._retry++;
+        setTimeout(fixDesktopPaste, 200);
       }
       return;
     }
-
-    var isComposing = false;
-    var justComposed = false; // Grace period after compositionend
-
-    ta.addEventListener('compositionstart', function () {
-      isComposing = true;
-      justComposed = false;
-    }, true);
-
-    ta.addEventListener('compositionend', function () {
-      isComposing = false;
-      justComposed = true;
-      // Clear textarea after xterm's _finalizeComposition has read it.
-      // xterm uses setTimeout(0) internally, so we use a slightly longer
-      // delay to ensure xterm reads the value before we clear it.
-      setTimeout(function () {
-        ta.value = '';
-      }, 10);
-      // End grace period — enough time for Tab keydown to be caught
-      setTimeout(function () {
-        justComposed = false;
-      }, 50);
-    }, true);
-
-    ta.addEventListener('keydown', function (e) {
-      if (e.key === 'Tab' && (isComposing || justComposed)) {
-        // Tab during/after IME composition:
-        // - compositionend (forced by Chrome) will send the raw pinyin
-        // - We block Tab itself so \t is NOT sent to terminal
-        // - We clear textarea to prevent input event re-sending the pinyin
-        e.preventDefault();
-        e.stopImmediatePropagation();
-        // Ensure textarea is cleared after the forced compositionend
-        setTimeout(function () {
-          ta.value = '';
-        }, 10);
-      }
-    }, true);
-
-    // Block the input event that fires right after compositionend.
-    // Without this, xterm's input handler re-reads textarea.value (still
-    // populated because our setTimeout(10) hasn't fired yet) and sends
-    // the pinyin a second time → "womenwomen" duplicate.
-    // NOTE: we do NOT reset justComposed here — the keydown(Tab) handler
-    // needs it, and in some browsers input can fire before keydown.
-    ta.addEventListener('input', function () {
-      if (justComposed) {
-        ta.value = '';
-      }
-    }, true);
-
-    // Fix paste: clear textarea after paste (original fixDesktopPaste logic)
     ta.addEventListener('paste', function () {
+      // Clear textarea after xterm has processed the paste event.
+      // Use requestAnimationFrame to ensure xterm's own paste handler runs first.
       requestAnimationFrame(function () {
         ta.value = '';
       });
