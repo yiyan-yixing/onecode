@@ -167,6 +167,18 @@
       }
     }, true);
 
+    // Block the input event that fires right after compositionend.
+    // Without this, xterm's input handler re-reads textarea.value (still
+    // populated because our setTimeout(10) hasn't fired yet) and sends
+    // the pinyin a second time → "womenwomen" duplicate.
+    // NOTE: we do NOT reset justComposed here — the keydown(Tab) handler
+    // needs it, and in some browsers input can fire before keydown.
+    ta.addEventListener('input', function () {
+      if (justComposed) {
+        ta.value = '';
+      }
+    }, true);
+
     // Fix paste: clear textarea after paste (original fixDesktopPaste logic)
     ta.addEventListener('paste', function () {
       requestAnimationFrame(function () {
