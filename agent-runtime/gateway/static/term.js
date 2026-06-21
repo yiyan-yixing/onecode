@@ -100,32 +100,75 @@
     'letter-spacing:0!important}';
   document.head.appendChild(s);
 
-  // Fix desktop CJK IME: clear helper textarea after paste
-  // xterm reads clipboardData on paste and sends via term.onData(), but leaves
-  // the pasted text in textarea.value. When the next IME compositionend fires,
-  // xterm's compositionHelper reads textarea.value and sends the old paste +
-  // new composed text together — causing duplicated input.
+  // Fix desktop CJK IME: clear helper textarea after paste + Tab during composition
   //
-  // On desktop, xterm's built-in CompositionHelper handles CJK IME correctly:
-  // - keyCode 229 during composition is ignored by xterm's keydown handler
-  // - compositionend triggers _finalizeComposition(true) which reads textarea
-  //   and sends the composed text via term.onData()
-  // Do NOT add any compositionstart/compositionend/keydown interception on
-  // desktop — it will break CJK input by racing with xterm's internal
-  // setTimeout(0) read or blocking the commit key (Space/Enter).
-  (function fixDesktopPaste() {
+  // Problem 1: xterm leaves pasted text in textarea.value. Next compositionend
+  // reads textarea and sends old paste + new composed text together (duplicate).
+  // Fix: clear textarea after paste via requestAnimationFrame.
+  //
+  // Problem 2: Tab during IME composition causes Chrome to fire compositionend
+  // (cancelling IME, leaking raw pinyin) then Tab keydown. xterm's
+  // _finalizeComposition reads textarea.value and sends raw pinyin, then Tab
+  // sends \t, then the input event re-reads the still-populated textarea.value
+  // and sends the pinyin again. Result: "wo\tmenwomen" instead of "women".
+  //
+  // Fix: track composition state on desktop. When Tab is pressed during or
+  // right after composition (within 50ms grace), preventDefault + stop the
+  // Tab from reaching xterm. The forced compositionend will send the raw
+  // pinyin (which is the desired output for Tab — same as Enter behavior
+  // but without the \r). Then clear textarea.value to prevent the subsequent
+  // input event from re-sending the pinyin.
+  (function fixDesktopIME() {
     var ta = termEl.querySelector('.xterm-helper-textarea');
     if (!ta) {
-      if (typeof fixDesktopPaste._retry === 'undefined') fixDesktopPaste._retry = 0;
-      if (fixDesktopPaste._retry < 15) {
-        fixDesktopPaste._retry++;
-        setTimeout(fixDesktopPaste, 200);
+      if (typeof fixDesktopIME._retry === 'undefined') fixDesktopIME._retry = 0;
+      if (fixDesktopIME._retry < 15) {
+        fixDesktopIME._retry++;
+        setTimeout(fixDesktopIME, 200);
       }
       return;
     }
+
+    var isComposing = false;
+    var justComposed = false; // Grace period after compositionend
+
+    ta.addEventListener('compositionstart', function () {
+      isComposing = true;
+      justComposed = false;
+    }, true);
+
+    ta.addEventListener('compositionend', function () {
+      isComposing = false;
+      justComposed = true;
+      // Clear textarea after xterm's _finalizeComposition has read it.
+      // xterm uses setTimeout(0) internally, so we use a slightly longer
+      // delay to ensure xterm reads the value before we clear it.
+      setTimeout(function () {
+        ta.value = '';
+      }, 10);
+      // End grace period — enough time for Tab keydown to be caught
+      setTimeout(function () {
+        justComposed = false;
+      }, 50);
+    }, true);
+
+    ta.addEventListener('keydown', function (e) {
+      if (e.key === 'Tab' && (isComposing || justComposed)) {
+        // Tab during/after IME composition:
+        // - compositionend (forced by Chrome) will send the raw pinyin
+        // - We block Tab itself so \t is NOT sent to terminal
+        // - We clear textarea to prevent input event re-sending the pinyin
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        // Ensure textarea is cleared after the forced compositionend
+        setTimeout(function () {
+          ta.value = '';
+        }, 10);
+      }
+    }, true);
+
+    // Fix paste: clear textarea after paste (original fixDesktopPaste logic)
     ta.addEventListener('paste', function () {
-      // Clear textarea after xterm has processed the paste event.
-      // Use requestAnimationFrame to ensure xterm's own paste handler runs first.
       requestAnimationFrame(function () {
         ta.value = '';
       });
