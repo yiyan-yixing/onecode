@@ -91,18 +91,29 @@ step_header() {
 show_box() {
     local w="${1:-55}"
     [ "$w" -lt 30 ] && w=30
+    local inner=$((w - 4))  # usable width inside │ ... │
     echo "  ${CYAN}╭$(printf '─%.0s' $(seq 1 $((w-2))))╮${NC}"
     shift
     for line in "$@"; do
-        # Skip variable expansions that resolved to empty (e.g. optional lines)
-        # But keep intentional blank lines (" ") for visual spacing
+        # Skip variable expansions that resolved to __SKIP__ (optional lines)
         if [ "$line" = "__SKIP__" ]; then
             continue
         fi
-        # Pad or truncate line to fit inside box
-        local trimmed
-        trimmed="$(printf '%-'"$((w-3))".'s' "$(echo "$line" | head -c $((w-4)))")"
-        printf "  ${CYAN}│${NC} %s ${CYAN}│${NC}\n" "$trimmed"
+        # Strip ANSI codes to measure visible width
+        local visible
+        visible="$(printf '%s' "$line" | sed 's/\x1b\[[0-9;]*m//g')"
+        local vis_len=${#visible}
+        # Pad with spaces to fill the inner width
+        local pad=""
+        if [ "$vis_len" -lt "$inner" ]; then
+            pad="$(printf '%*s' $((inner - vis_len)) '')"
+        fi
+        # Truncate visible content if too long
+        if [ "$vis_len" -gt "$inner" ]; then
+            line="$(printf '%s' "$line" | sed 's/\x1b\[[0-9;]*m//g' | head -c "$inner")"
+            pad=""
+        fi
+        printf "  ${CYAN}│${NC} %s%s ${CYAN}│${NC}\n" "$line" "$pad"
     done
     echo "  ${CYAN}╰$(printf '─%.0s' $(seq 1 $((w-2))))╯${NC}"
 }
