@@ -131,6 +131,26 @@ case "$BACKEND" in
             echo "[entrypoint] Backend: opencode — WARNING: opencode not found in image."
             echo "[entrypoint] Falling back to claude-code."
             BACKEND="claude-code"
+            # Trigger claude-code install (same logic as claude-code case)
+            if [ -x "$CLAUDE_GLOBAL_DIR/bin/claude" ]; then
+                ln -sf "$CLAUDE_GLOBAL_DIR/bin/claude" /usr/local/bin/claude
+                echo "[entrypoint] Backend: claude-code — cached in volume, skipping install."
+            else
+                echo "[entrypoint] Backend: claude-code — Installing Claude Code CLI v${CLAUDE_CODE_VERSION}..."
+                echo "[entrypoint] This only happens on first start. Gateway is starting in parallel."
+                (
+                    mkdir -p "$CLAUDE_GLOBAL_DIR"
+                    npm install -g "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" \
+                        --prefix="$CLAUDE_GLOBAL_DIR" \
+                        --registry="$NPM_REGISTRY" \
+                        --no-optional \
+                        --no-audit \
+                        --no-fund
+                    ln -sf "$CLAUDE_GLOBAL_DIR/bin/claude" /usr/local/bin/claude
+                    echo "[entrypoint] Claude Code CLI installed successfully." > "$CLAUDE_INSTALL_LOG"
+                ) &
+                export CLAUDE_INSTALL_PID=$!
+            fi
         fi
         ;;
     *)
