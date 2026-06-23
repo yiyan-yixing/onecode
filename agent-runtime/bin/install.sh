@@ -94,8 +94,11 @@ show_box() {
     echo "  ${CYAN}╭$(printf '─%.0s' $(seq 1 $((w-2))))╮${NC}"
     shift
     for line in "$@"; do
-        # Skip empty variable expansions (e.g. optional lines)
-        [ -z "$line" ] && continue
+        # Skip variable expansions that resolved to empty (e.g. optional lines)
+        # But keep intentional blank lines (" ") for visual spacing
+        if [ "$line" = "__SKIP__" ]; then
+            continue
+        fi
         # Pad or truncate line to fit inside box
         local trimmed
         trimmed="$(printf '%-'"$((w-3))".'s' "$(echo "$line" | head -c $((w-4)))")"
@@ -112,9 +115,9 @@ error_box() {
     echo "" >&2
     show_box "$w" \
         "${RED}${BOLD}${title}${NC}" \
-        "" \
+        " " \
         "$@" \
-        "" \
+        " " \
         "${DIM}Log: /tmp/onecode-install.log${NC}" >&2
     echo "" >&2
 }
@@ -847,18 +850,18 @@ main() {
 
     show_box 55 \
         "  ${GREEN}${BOLD}✅ OneCode installed!${NC}" \
-        "" \
+        " " \
         "  ${BOLD}First run:${NC}" \
         "    source ${shell_rc}     # load PATH" \
         "    oc remote             # → http://localhost:7681" \
-        "" \
+        " " \
         "  ${BOLD}Common commands:${NC}" \
         "    oc                     interactive AI CLI" \
         "    oc remote              web IDE in browser" \
         "    oc --backend opencode  MIT backend, no API key" \
         "    oc config list         show all settings" \
-        "${arm64_line}" \
-        "" \
+        "${arm64_line:-__SKIP__}" \
+        " " \
         "  ${DIM}Config:   ${OC_HOME}/settings.json${NC}" \
         "  ${DIM}CLI:      ${INSTALL_DIR}/oc${NC}" \
         "  ${DIM}Image:    ${IMAGE_REPO}:${IMAGE_TAG}${NC}" \
