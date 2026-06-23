@@ -493,11 +493,11 @@ WELCOME
     echo "    Model:        ${model}"
     echo "  ─────────────────────────────────────"
     echo ""
-    read -rp "  Confirm? (Y/n) " confirm_choice
+    read -rp "  Reconfigure? (y/N) " confirm_choice
     echo ""
 
     case "$confirm_choice" in
-        n|N)
+        y|Y)
             # Modify each attribute: Provider → Base URL → API Key → Model
             echo "  Modify Provider (Enter to keep current: ${provider})"
             echo "    1) Anthropic         2) OpenAI Compatible  3) Custom"

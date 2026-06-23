@@ -570,11 +570,12 @@ configure() {
             step_ok "Config migrated (provider: $(provider_display "$PROVIDER"))"
         else
             info "Existing v2 config found at ${OC_HOME}/settings.json"
+            # Always read from file (script defaults would block reading otherwise)
             [ -z "$API_KEY" ] && API_KEY=$(jq -r '.api_key // empty' "$OC_HOME/settings.json" 2>/dev/null || true)
-            [ -z "$PROVIDER" ] && PROVIDER=$(jq -r '.provider // empty' "$OC_HOME/settings.json" 2>/dev/null || true)
-            [ -z "$API_BASE_URL" ] && API_BASE_URL=$(jq -r '.api_base_url // empty' "$OC_HOME/settings.json" 2>/dev/null || true)
-            [ -z "$MODEL" ] && MODEL=$(jq -r '.model // empty' "$OC_HOME/settings.json" 2>/dev/null || true)
-            [ -z "${BACKEND:-}" ] && BACKEND=$(jq -r '.backend // empty' "$OC_HOME/settings.json" 2>/dev/null || true)
+            PROVIDER=$(jq -r '.provider // empty' "$OC_HOME/settings.json" 2>/dev/null || true)
+            API_BASE_URL=$(jq -r '.api_base_url // empty' "$OC_HOME/settings.json" 2>/dev/null || true)
+            MODEL=$(jq -r '.model // empty' "$OC_HOME/settings.json" 2>/dev/null || true)
+            BACKEND=$(jq -r '.backend // empty' "$OC_HOME/settings.json" 2>/dev/null || true)
         fi
     fi
 
