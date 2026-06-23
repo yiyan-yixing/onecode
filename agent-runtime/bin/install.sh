@@ -692,7 +692,6 @@ configure() {
 
         case "$_confirm_choice" in
             y|Y)
-            n|N)
                 # Modify each attribute: Provider → Base URL → API Key → Model
                 echo "  Modify Provider ${DIM}(Enter to keep current: $(provider_display "$PROVIDER"))${NC}"
                 echo "    ${GREEN}1)${NC} Anthropic Claude"
