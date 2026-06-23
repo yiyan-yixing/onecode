@@ -1,3 +1,4 @@
+[0;33m[warn][0m Mirror download failed, trying next method...
 #!/usr/bin/env bash
 set -euo pipefail
 
@@ -405,10 +406,12 @@ WELCOME
             echo ""
             echo "    1) Anthropic         (Claude models)"
             echo "    2) OpenAI Compatible (any OpenAI-format API)"
+            echo "    3) Custom            (enter your own provider name)"
             echo ""
-            read -rp "  Select [1-2]: " provider_choice
+            read -rp "  Select [1-3]: " provider_choice
             case "$provider_choice" in
                 2) chosen_provider="openai_compatible" ;;
+                3) read -rp "  Provider name: " chosen_provider ;;
                 *) chosen_provider="anthropic" ;;
             esac
             echo ""
@@ -484,6 +487,7 @@ WELCOME
     local key_display="****${api_key: -4}"
     echo ""
     echo "  ── Current Configuration ────────────"
+    echo "    Provider:     ${provider}"
     echo "    API Base URL: ${api_base_url}"
     echo "    API Key:      ${key_display}"
     echo "    Model:        ${model}"
@@ -494,7 +498,17 @@ WELCOME
 
     case "$confirm_choice" in
         n|N)
-            # Modify each attribute: Base URL → API Key → Model
+            # Modify each attribute: Provider → Base URL → API Key → Model
+            echo "  Modify Provider (Enter to keep current: ${provider})"
+            echo "    1) Anthropic         2) OpenAI Compatible  3) Custom"
+            read -rp "  Select [1-3] or Enter to skip: " new_provider_choice
+            case "$new_provider_choice" in
+                1) provider="anthropic" ;;
+                2) provider="openai_compatible" ;;
+                3) read -rp "  Provider name: " new_provider; [ -n "$new_provider" ] && provider="$new_provider" ;;
+            esac
+
+            echo ""
             echo "  Modify API Base URL (Enter to keep current: ${api_base_url})"
             read -rp "  New API Base URL: " new_url
             [ -n "$new_url" ] && api_base_url="$new_url"
