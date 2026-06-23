@@ -578,16 +578,18 @@ configure() {
         fi
     fi
 
-    # ── Interactive wizard (first run or missing fields) ─────────
+    # Apply provider defaults for any still-empty values
+    if [ -z "$API_BASE_URL" ]; then
+        eval "API_BASE_URL=\${PROVIDER_DEFAULTS_${PROVIDER}_api_base_url:-}"
+    fi
+    if [ -z "$MODEL" ]; then
+        eval "MODEL=\${PROVIDER_DEFAULTS_${PROVIDER}_model:-}"
+    fi
+
+    # ── First run: full interactive wizard ─────────
     if [ ! -f "$OC_HOME/settings.json" ]; then
         echo ""
         echo "  ${BOLD}OneCode needs the following configuration:${NC}"
-        echo ""
-        echo "  ${CYAN}──${NC} ${BOLD}Required config items${NC} ${CYAN}───────────────────────────${NC}"
-        echo "    1. Provider    AI service provider (Anthropic / OpenAI Compatible / OpenCode)"
-        echo "    2. API Key     Your API key (OpenCode users can skip)"
-        echo "    3. Model       LLM model name (default provided per provider)"
-        echo "  ${CYAN}────────────────────────────────────────────${NC}"
         echo ""
 
         # 1. Provider
@@ -595,6 +597,7 @@ configure() {
         echo "    ${GREEN}1)${NC} Anthropic Claude ${DIM}(default, recommended)${NC}"
         echo "    ${GREEN}2)${NC} OpenAI Compatible ${DIM}(any OpenAI-format API)${NC}"
         echo "    ${GREEN}3)${NC} OpenCode ${DIM}(MIT, local models, no API key needed)${NC}"
+        echo "    ${GREEN}4)${NC} Custom ${DIM}(enter your own provider name)${NC}"
         echo ""
         if [ -z "${_PROVIDER_SET_BY_ARG:-}" ]; then
             echo -n "  ▸ "
@@ -602,6 +605,7 @@ configure() {
             case "$_prov_choice" in
                 2) PROVIDER="openai_compatible"; BACKEND="${BACKEND:-claude-code}" ;;
                 3) PROVIDER="opencode"; BACKEND="opencode" ;;
+                4) echo -n "  Provider name: "; read -r PROVIDER; BACKEND="${BACKEND:-claude-code}" ;;
                 *) PROVIDER="anthropic"; BACKEND="${BACKEND:-claude-code}" ;;
             esac
         fi
@@ -614,17 +618,18 @@ configure() {
             [ -z "$API_BASE_URL" ] && API_BASE_URL=""
             [ -z "$MODEL" ] && MODEL="local"
         else
-            # 2. API Base URL (openai_compatible only)
-            if [ "$PROVIDER" = "openai_compatible" ]; then
-                echo "  ${BOLD}? API Base URL${NC}"
-                echo "  ${DIM}Example: https://api.deepseek.com/v1${NC}"
-                echo -n "  ▸ "
-                read -r API_BASE_URL
-                echo "  ${GREEN}✓${NC} API URL: ${API_BASE_URL}"
-                echo ""
-            fi
+            # 2. API Base URL
+            local default_url
+            eval "default_url=\${PROVIDER_DEFAULTS_${PROVIDER}_api_base_url:-}"
+            echo "  ${BOLD}? API Base URL${NC} ${DIM}(Enter for default: ${default_url:-empty})${NC}"
+            echo -n "  ▸ "
+            read -r _url_input
+            [ -n "$_url_input" ] && API_BASE_URL="$_url_input"
+            [ -z "$API_BASE_URL" ] && API_BASE_URL="$default_url"
+            echo "  ${GREEN}✓${NC} API Base URL: ${API_BASE_URL:-empty}"
+            echo ""
 
-            # 2. API Key (hidden input)
+            # 3. API Key (hidden input)
             echo "  ${BOLD}? API Key${NC} ($(provider_display "$PROVIDER"))"
             case "$PROVIDER" in
                 anthropic) echo "  ${DIM}Get yours: https://console.anthropic.com/settings/keys${NC}" ;;
@@ -639,144 +644,99 @@ configure() {
             [ -n "$API_KEY" ] && echo "  ${GREEN}✓${NC} API Key: $(mask_key "$API_KEY")"
             echo ""
 
-            # 3. Model
+            # 4. Model
             local default_model
             eval "default_model=\${PROVIDER_DEFAULTS_${PROVIDER}_model:-}"
             echo "  ${BOLD}? Model${NC} ${DIM}(Enter for default: ${default_model})${NC}"
             echo -n "  ▸ "
-            read -r MODEL
+            read -r _model_input
+            [ -n "$_model_input" ] && MODEL="$_model_input"
             [ -z "$MODEL" ] && MODEL="$default_model"
             echo "  ${GREEN}✓${NC} Model: ${MODEL}"
         fi
 
         echo ""
         echo "  ${CYAN}──${NC} ${BOLD}配置确认${NC} ${CYAN}─────────────────────────────────${NC}"
-        echo "    Provider:  $(provider_display "$PROVIDER")"
-        echo "    Backend:   ${BACKEND:-claude-code}"
+        echo "    Provider:     $(provider_display "$PROVIDER")"
         if [ "$PROVIDER" != "opencode" ]; then
-            echo "    API Key:   $(mask_key "$API_KEY")"
-            [ -n "$API_BASE_URL" ] && echo "    API URL:   ${API_BASE_URL}"
+            echo "    API Base URL: ${API_BASE_URL}"
+            echo "    API Key:      $(mask_key "$API_KEY")"
         fi
-        echo "    Model:     ${MODEL}"
-        echo "    Config:    ${OC_HOME}/settings.json"
+        echo "    Model:        ${MODEL}"
+        echo "    Backend:      ${BACKEND:-claude-code}"
         echo "  ${CYAN}────────────────────────────────────────────${NC}"
         echo ""
 
     else
-        # Existing config — show current settings and offer to reconfigure
+        # ── Existing config: confirm or modify ─────────
+        local key_display
+        key_display="$(mask_key "$API_KEY")"
         echo ""
         echo "  ${CYAN}──${NC} ${BOLD}当前配置${NC} ${CYAN}─────────────────────────────────${NC}"
-        echo "    Provider:  $(provider_display "$PROVIDER")"
-        echo "    Backend:   ${BACKEND:-claude-code}"
+        echo "    Provider:     $(provider_display "$PROVIDER")"
         if [ "$PROVIDER" != "opencode" ]; then
-            echo "    API Key:   $(mask_key "$API_KEY")"
-            [ -n "$API_BASE_URL" ] && echo "    API URL:   ${API_BASE_URL}"
+            echo "    API Base URL: ${API_BASE_URL}"
+            echo "    API Key:      ${key_display}"
         fi
-        echo "    Model:     ${MODEL}"
-        echo "    Config:    ${OC_HOME}/settings.json"
+        echo "    Model:        ${MODEL}"
+        echo "    Backend:      ${BACKEND:-claude-code}"
         echo "  ${CYAN}────────────────────────────────────────────${NC}"
         echo ""
-        echo "  ${BOLD}Reconfigure?${NC}"
-        echo "    ${GREEN}1)${NC} Keep current settings ${DIM}(default)${NC}"
-        echo "    ${GREEN}2)${NC} Reconfigure from scratch"
-        echo ""
-        echo -n "  ▸ "
-        read -r _reconfig_choice
+        echo -n "  ${BOLD}Confirm? (Y/n)${NC} "
+        read -r _confirm_choice
         echo ""
 
-        case "$_reconfig_choice" in
-            2)
-                # Full reconfigure — same wizard as first run
-                echo "  ${BOLD}? Select your AI provider:${NC}"
-                echo "    ${GREEN}1)${NC} Anthropic Claude ${DIM}(default, recommended)${NC}"
-                echo "    ${GREEN}2)${NC} OpenAI Compatible ${DIM}(any OpenAI-format API)${NC}"
-                echo "    ${GREEN}3)${NC} OpenCode ${DIM}(MIT, local models, no API key needed)${NC}"
-                echo ""
+        case "$_confirm_choice" in
+            n|N)
+                # Modify each attribute: Provider → Base URL → API Key → Model
+                echo "  Modify Provider ${DIM}(Enter to keep current: $(provider_display "$PROVIDER"))${NC}"
+                echo "    ${GREEN}1)${NC} Anthropic Claude"
+                echo "    ${GREEN}2)${NC} OpenAI Compatible"
+                echo "    ${GREEN}3)${NC} OpenCode"
+                echo "    ${GREEN}4)${NC} Custom"
                 echo -n "  ▸ "
                 read -r _prov_choice
                 case "$_prov_choice" in
+                    1) PROVIDER="anthropic"; BACKEND="${BACKEND:-claude-code}" ;;
                     2) PROVIDER="openai_compatible"; BACKEND="${BACKEND:-claude-code}" ;;
                     3) PROVIDER="opencode"; BACKEND="opencode" ;;
-                    *) PROVIDER="anthropic"; BACKEND="${BACKEND:-claude-code}" ;;
+                    4) echo -n "  Provider name: "; read -r PROVIDER; BACKEND="${BACKEND:-claude-code}" ;;
                 esac
-                echo "  ${GREEN}✓${NC} $(provider_display "$PROVIDER")"
-                echo ""
 
-                # Reset values for reconfiguration
-                API_KEY=""
-                API_BASE_URL=""
-                MODEL=""
+                if [ "$PROVIDER" != "opencode" ]; then
+                    echo ""
+                    echo "  Modify API Base URL ${DIM}(Enter to keep current: ${API_BASE_URL})${NC}"
+                    echo -n "  ▸ "
+                    read -r _url_input
+                    [ -n "$_url_input" ] && API_BASE_URL="$_url_input"
 
-                if [ "$PROVIDER" = "opencode" ]; then
-                    info "OpenCode runs local models — no API key needed."
+                    echo ""
+                    echo "  Modify API Key ${DIM}(Enter to keep current: ${key_display})${NC}"
+                    echo -n "  ▸ "
+                    if [ -t 0 ]; then
+                        read -rs _new_key
+                    else
+                        read -r _new_key
+                    fi
+                    echo ""
+                    [ -n "$_new_key" ] && API_KEY="$_new_key"
+
+                    echo ""
+                    echo "  Modify Model ${DIM}(Enter to keep current: ${MODEL})${NC}"
+                    echo -n "  ▸ "
+                    read -r _model_input
+                    [ -n "$_model_input" ] && MODEL="$_model_input"
+                else
                     API_BASE_URL=""
                     MODEL="local"
-                else
-                    if [ "$PROVIDER" = "openai_compatible" ]; then
-                        echo "  ${BOLD}? API Base URL${NC}"
-                        echo "  ${DIM}Example: https://api.deepseek.com/v1${NC}"
-                        echo -n "  ▸ "
-                        read -r API_BASE_URL
-                        echo "  ${GREEN}✓${NC} ${API_BASE_URL}"
-                        echo ""
-                    fi
-
-                    echo "  ${BOLD}? API Key${NC} ($(provider_display "$PROVIDER"))"
-                    case "$PROVIDER" in
-                        anthropic) echo "  ${DIM}Get yours: https://console.anthropic.com/settings/keys${NC}" ;;
-                    esac
-                    echo -n "  ▸ "
-                    if [ -t 0 ]; then
-                        read -rs API_KEY
-                    else
-                        read -r API_KEY
-                    fi
-                    echo ""
-                    [ -n "$API_KEY" ] && echo "  ${GREEN}✓${NC} $(mask_key "$API_KEY")"
-                    echo ""
-
-                    local default_model
-                    eval "default_model=\${PROVIDER_DEFAULTS_${PROVIDER}_model:-}"
-                    echo "  ${BOLD}? Model${NC} ${DIM}(Enter for default: ${default_model})${NC}"
-                    echo -n "  ▸ "
-                    read -r MODEL
-                    [ -z "$MODEL" ] && MODEL="$default_model"
-                    echo "  ${GREEN}✓${NC} ${MODEL}"
                 fi
 
                 echo ""
-                echo "  ${CYAN}──${NC} ${BOLD}配置确认${NC} ${CYAN}─────────────────────────────────${NC}"
-                echo "    Provider:  $(provider_display "$PROVIDER")"
-                echo "    Backend:   ${BACKEND:-claude-code}"
-                if [ "$PROVIDER" != "opencode" ]; then
-                    echo "    API Key:   $(mask_key "$API_KEY")"
-                    [ -n "$API_BASE_URL" ] && echo "    API URL:   ${API_BASE_URL}"
-                fi
-                echo "    Model:     ${MODEL}"
-                echo "    Config:    ${OC_HOME}/settings.json"
-                echo "  ${CYAN}────────────────────────────────────────────${NC}"
-                echo ""
-                ;;
-            *)
-                # Keep existing — only prompt for truly missing critical values
-                if [ -z "$API_KEY" ] && [ "$PROVIDER" != "opencode" ]; then
-                    echo "  ${YELLOW}⚠ API Key is not set.${NC}"
-                    case "$PROVIDER" in
-                        anthropic) echo "  ${DIM}Get yours: https://console.anthropic.com/settings/keys${NC}" ;;
-                    esac
-                    echo -n "  ▸ API Key (Enter to skip): "
-                    if [ -t 0 ]; then
-                        read -rs API_KEY
-                    else
-                        read -r API_KEY
-                    fi
-                    echo ""
-                fi
                 ;;
         esac
     fi
 
-    # Apply provider-based defaults for any still-empty values
+    # Re-apply provider defaults for any still-empty values
     if [ -z "$API_BASE_URL" ]; then
         eval "API_BASE_URL=\${PROVIDER_DEFAULTS_${PROVIDER}_api_base_url:-}"
     fi
