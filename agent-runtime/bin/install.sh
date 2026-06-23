@@ -686,11 +686,12 @@ configure() {
         echo "    Backend:      ${BACKEND:-claude-code}"
         echo "  ${CYAN}────────────────────────────────────────────${NC}"
         echo ""
-        echo -n "  ${BOLD}Confirm? (Y/n)${NC} "
+        echo -n "  ${BOLD}是否重新配置? (Y/n)${NC} "
         read -r _confirm_choice
         echo ""
 
         case "$_confirm_choice" in
+            y|Y)
             n|N)
                 # Modify each attribute: Provider → Base URL → API Key → Model
                 echo "  Modify Provider ${DIM}(Enter to keep current: $(provider_display "$PROVIDER"))${NC}"

@@ -493,7 +493,7 @@ WELCOME
     echo "    Model:        ${model}"
     echo "  ─────────────────────────────────────"
     echo ""
-    read -rp "  Reconfigure? (y/N) " confirm_choice
+    read -rp "  是否重新配置? (Y/n) " confirm_choice
     echo ""
 
     case "$confirm_choice" in
