@@ -377,14 +377,13 @@ cfg_load
 [ -z "${model:-}" ]        && model="$(cfg_default "${provider:-anthropic}" model)" || true
 
 resolve_config() {
-    # If api_key is set with a real value, we're good
-    if [ -n "${api_key:-}" ] && ! is_placeholder_key "$api_key"; then
-        export API_KEY="${api_key}" API_BASE_URL="${api_base_url:-}" MODEL="${model:-}"
-        return 0
-    fi
+    # Fill in provider defaults for missing fields
+    [ -z "${api_base_url:-}" ] && api_base_url="$(cfg_default "${provider:-anthropic}" api_base_url)" || true
+    [ -z "${model:-}" ]        && model="$(cfg_default "${provider:-anthropic}" model)" || true
 
-    # First run or placeholder key: interactive wizard
-    cat <<'WELCOME'
+    # First run or placeholder key: full interactive wizard
+    if [ -z "${api_key:-}" ] || is_placeholder_key "${api_key:-}"; then
+        cat <<'WELCOME'
 
   ╔═══════════════════════════════════════════════╗
   ║          Welcome to OneCode! 🚀               ║
@@ -394,43 +393,39 @@ resolve_config() {
   ╚═══════════════════════════════════════════════╝
 
 WELCOME
-    if is_placeholder_key "${api_key:-}"; then
-        echo "⚠  Current API key appears to be a placeholder. Please enter a real key."
-        echo ""
-    fi
+        if is_placeholder_key "${api_key:-}"; then
+            echo "⚠  Current API key appears to be a placeholder. Please enter a real key."
+            echo ""
+        fi
 
-    # Step 1: Provider selection
-    local chosen_provider="${provider:-}"
-    if [ -z "$chosen_provider" ]; then
-        echo "  Step 1: Choose your API provider"
-        echo ""
-        echo "    1) Anthropic         (Claude models)"
-        echo "    2) OpenAI Compatible (any OpenAI-format API)"
-        echo ""
-        read -rp "  Select [1-2]: " provider_choice
-        case "$provider_choice" in
-            2) chosen_provider="openai_compatible" ;;
-            *) chosen_provider="anthropic" ;;
-        esac
-        echo ""
-    fi
-    provider="$chosen_provider"
+        # Step 1: Provider selection
+        local chosen_provider="${provider:-}"
+        if [ -z "$chosen_provider" ]; then
+            echo "  Step 1: Choose your API provider"
+            echo ""
+            echo "    1) Anthropic         (Claude models)"
+            echo "    2) OpenAI Compatible (any OpenAI-format API)"
+            echo ""
+            read -rp "  Select [1-2]: " provider_choice
+            case "$provider_choice" in
+                2) chosen_provider="openai_compatible" ;;
+                *) chosen_provider="anthropic" ;;
+            esac
+            echo ""
+        fi
+        provider="$chosen_provider"
 
-    # Step 2: API Base URL (only for openai_compatible)
-    if [ -z "${api_base_url:-}" ] && [ "$provider" = "openai_compatible" ]; then
+        # Step 2: API Base URL
         echo "  Step 2: API Base URL"
-        echo "  Example: https://api.openai.com/v1  or  https://your-gateway.com/v1"
-        read -rp "  API Base URL: " api_base_url
+        local default_url
+        default_url="$(cfg_default "$provider" api_base_url)"
+        read -rp "  API Base URL [${api_base_url:-$default_url}]: " new_url
+        [ -n "$new_url" ] && api_base_url="$new_url"
+        [ -z "${api_base_url:-}" ] && api_base_url="$default_url"
         echo ""
-    elif [ -z "${api_base_url:-}" ]; then
-        api_base_url="$(cfg_default "$provider" api_base_url)"
-    fi
 
-    # Step 3: API Key
-    local key_step
-    [ "$provider" = "openai_compatible" ] && key_step="3" || key_step="2"
-    if [ -z "${api_key:-}" ] || is_placeholder_key "${api_key:-}"; then
-        echo "  Step ${key_step}: API Key"
+        # Step 3: API Key
+        echo "  Step 3: API Key"
         if [ "$provider" = "anthropic" ]; then
             echo "  Get your key at: https://console.anthropic.com/"
         fi
@@ -441,54 +436,88 @@ WELCOME
             exit 1
         fi
         echo ""
-    fi
 
-    # Step 4: Model
-    local model_step
-    [ "$provider" = "openai_compatible" ] && model_step="4" || model_step="3"
-    local default_model
-    default_model="$(cfg_default "$provider" model)"
-    if [ -z "${model:-}" ]; then
-        echo "  Step ${model_step}: Model"
-        echo "  Press Enter for ${default_model}, or type a model name."
-        read -rp "  Model [${default_model}]: " model
-        model="${model:-$default_model}"
+        # Step 4: Model
+        echo "  Step 4: Model"
+        local default_model
+        default_model="$(cfg_default "$provider" model)"
+        read -rp "  Model [${model:-$default_model}]: " new_model
+        [ -n "$new_model" ] && model="$new_model"
+        [ -z "${model:-}" ] && model="$default_model"
         echo ""
-    fi
 
-    # Step 5: Docker platform (only prompt on Apple Silicon)
-    if [ -z "${docker_platform:-}" ]; then
-        docker_platform="linux/amd64"
-        if [ "$(uname -s)" = "Darwin" ] && [ "$(uname -m)" = "arm64" ]; then
-            local plat_step
-            [ "$provider" = "openai_compatible" ] && plat_step="5" || plat_step="4"
-            echo "  Step ${plat_step}: Docker platform"
-            echo "  Detected: macOS arm64 (Apple Silicon)"
-            read -rp "  Docker platform [linux/amd64]: " docker_platform
-            docker_platform="${docker_platform:-linux/amd64}"
-            echo ""
+        # Step 5: Docker platform (only prompt on Apple Silicon)
+        if [ -z "${docker_platform:-}" ]; then
+            docker_platform="linux/amd64"
+            if [ "$(uname -s)" = "Darwin" ] && [ "$(uname -m)" = "arm64" ]; then
+                echo "  Step 5: Docker platform"
+                echo "  Detected: macOS arm64 (Apple Silicon)"
+                read -rp "  Docker platform [linux/amd64]: " docker_platform
+                docker_platform="${docker_platform:-linux/amd64}"
+                echo ""
+            fi
         fi
+
+        # Summary
+        echo "  ─────────────────────────────────────"
+        echo "  Configuration summary:"
+        echo "    Provider:        ${provider}"
+        echo "    API Base URL:    ${api_base_url}"
+        echo "    Model:           ${model}"
+        echo "    Docker Platform: ${docker_platform:-linux/amd64}"
+        echo "  ─────────────────────────────────────"
+        echo ""
+
+        cfg_save_all
+        echo "  ✓ Config saved to ~/.onecode/settings.json"
+        echo ""
+        echo "  Quick start:"
+        echo "    oc              # interactive Claude CLI"
+        echo "    oc remote       # web terminal at http://localhost:7681"
+        echo ""
+
+        export API_KEY="$api_key" API_BASE_URL="${api_base_url:-}" MODEL="${model:-}"
+        return 0
     fi
 
-    # Summary
+    # ── Returning user: confirm 3 key attributes ──────────────────
+    local key_display="****${api_key: -4}"
+    echo ""
+    echo "  ── Current Configuration ────────────"
+    echo "    API Base URL: ${api_base_url}"
+    echo "    API Key:      ${key_display}"
+    echo "    Model:        ${model}"
     echo "  ─────────────────────────────────────"
-    echo "  Configuration summary:"
-    echo "    Provider:        ${provider}"
-    echo "    API Base URL:    ${api_base_url}"
-    echo "    Model:           ${model}"
-    echo "    Docker Platform: ${docker_platform:-linux/amd64}"
-    echo "  ─────────────────────────────────────"
+    echo ""
+    read -rp "  Confirm? (Y/n) " confirm_choice
     echo ""
 
-    cfg_save_all
-    echo "  ✓ Config saved to ~/.onecode/settings.json"
-    echo ""
-    echo "  Quick start:"
-    echo "    oc              # interactive Claude CLI"
-    echo "    oc remote       # web terminal at http://localhost:7681"
-    echo ""
+    case "$confirm_choice" in
+        n|N)
+            # Modify each attribute: Base URL → API Key → Model
+            echo "  Modify API Base URL (Enter to keep current: ${api_base_url})"
+            read -rp "  New API Base URL: " new_url
+            [ -n "$new_url" ] && api_base_url="$new_url"
 
-    export API_KEY="$api_key" API_BASE_URL="${api_base_url:-}" MODEL="${model:-}"
+            echo ""
+            echo "  Modify API Key (Enter to keep current: ${key_display})"
+            read -rsp "  New API Key (input hidden): " new_key
+            echo
+            [ -n "$new_key" ] && api_key="$new_key"
+
+            echo ""
+            echo "  Modify Model (Enter to keep current: ${model})"
+            read -rp "  New Model: " new_model
+            [ -n "$new_model" ] && model="$new_model"
+
+            echo ""
+            cfg_save_all
+            echo "  ✓ Config updated"
+            echo ""
+            ;;
+    esac
+
+    export API_KEY="${api_key}" API_BASE_URL="${api_base_url:-}" MODEL="${model:-}"
 }
 
 # ── Docker common args ────────────────────────────────────────────
