@@ -556,7 +556,7 @@ configure() {
     # Migrate v1 config if present (read old fields, write v2 format)
     if [ -f "$OC_HOME/settings.json" ]; then
         local old_ver
-        old_ver=$(jq -r '.$version // 0' "$OC_HOME/settings.json" 2>/dev/null || echo "0")
+        old_ver=$(jq -r '.["$version"] // 0' "$OC_HOME/settings.json" 2>/dev/null || echo "0")
         if [ "$old_ver" -lt 2 ] 2>/dev/null; then
             info "Migrating config from v1 to v2 format..."
             local old_key old_url old_model
@@ -765,7 +765,7 @@ configure() {
       --argjson ssh_port "${SSH_PORT:-8222}" \
       --arg term_token "${TERM_TOKEN:-}" \
       --argjson gateway_https "${GATEWAY_HTTPS:-false}" \
-    '{$version:$v,$provider,$api_key,$api_base_url,$model,$backend,$docker_platform,$image_tag,$gh_mirror,$gateway_port,$app_port,$ssh_port,$term_token,$gateway_https}' \
+    '{"$version":$v,"provider":$provider,"api_key":$api_key,"api_base_url":$api_base_url,"model":$model,"backend":$backend,"docker_platform":$docker_platform,"image_tag":$image_tag,"gh_mirror":$gh_mirror,"gateway_port":$gateway_port,"app_port":$app_port,"ssh_port":$ssh_port,"term_token":$term_token,"gateway_https":$gateway_https}' \
     > "$tmp" && mv "$tmp" "$OC_HOME/settings.json" && chmod 600 "$OC_HOME/settings.json"
 
     step_ok "Config saved to ${OC_HOME}/settings.json"

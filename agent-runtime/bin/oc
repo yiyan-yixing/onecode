@@ -287,7 +287,7 @@ cfg_save_all() {
       --argjson ssh_port "${ssh_port:-8222}" \
       --arg term_token "${term_token:-}" \
       --argjson gateway_https "${gateway_https:-false}" \
-    '{"$version":$v,$provider,$api_key,$api_base_url,$model,$backend,$docker_platform,$image_tag,$gh_mirror,$gateway_port,$app_port,$ssh_port,$term_token,$gateway_https}' \
+    '{"$version":$v,"provider":$provider,"api_key":$api_key,"api_base_url":$api_base_url,"model":$model,"backend":$backend,"docker_platform":$docker_platform,"image_tag":$image_tag,"gh_mirror":$gh_mirror,"gateway_port":$gateway_port,"app_port":$app_port,"ssh_port":$ssh_port,"term_token":$term_token,"gateway_https":$gateway_https}' \
     > "$tmp" && mv "$tmp" "$OC_CONFIG" && chmod 600 "$OC_CONFIG"
 }
 
