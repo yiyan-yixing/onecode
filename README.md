@@ -7,6 +7,8 @@
 
 > ⚠️ 本项目仅供个人学习和研究使用，详见 [免责声明](DISCLAIMER.md)。
 
+![OneCode Screenshot](docs/screenshot.png)
+
 ---
 
 ## ✨ 特性
