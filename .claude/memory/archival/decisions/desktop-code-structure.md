@@ -965,7 +965,7 @@ export function initMobile() {
   "build": { "beforeBuildCommand": "npm run build", "devUrl": "http://localhost:1420" },
   "app": {
     "windows": [{
-      "title": "OneCode · AI 原生 IDE",
+      "title": "OneCode · AI Agent Terminal",
       "width": 1200, "height": 800,
       "minWidth": 800, "minHeight": 500,
       "decorations": true,

@@ -20,7 +20,7 @@ const indexHtml = htmlTemplate
   .replace('{{CONFIG}}', JSON.stringify({
     token: config.TERM_TOKEN, ocName: process.env.OC_NAME || '', version: config.VERSION,
   }))
-  .replace('{{TITLE}}', 'OneCode · AI 原生 IDE');
+  .replace('{{TITLE}}', 'OneCode · AI Agent Terminal');
 
 // Pre-compress indexHtml at startup so each request avoids re-gzipping ~44KB
 const indexHtmlBuf = Buffer.from(indexHtml, 'utf8');

@@ -2,7 +2,7 @@
 
 ## Overview
 
-OneCode is an AI-native IDE built on top of Claude Code. The architecture follows the wxyy-sandbox pattern: a Node.js gateway server serves a single-page HTML UI with xterm.js terminal connected to Claude Code via PTY.
+OneCode is an AI Agent Terminal built on top of Claude Code. The architecture follows the wxyy-sandbox pattern: a Node.js gateway server serves a single-page HTML UI with xterm.js terminal connected to Claude Code via PTY.
 
 ## Key Architecture
 

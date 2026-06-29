@@ -26,7 +26,7 @@
 **重构后的首屏结构**：
 
 ```markdown
-# OneCode — AI 原生 IDE
+# OneCode — AI Agent Terminal
 
 [![Version](https://img.shields.io/github/v/release/yiyan-yixing/onecode)]
 [![License](https://img.shields.io/github/license/yiyan-yixing/onecode)]

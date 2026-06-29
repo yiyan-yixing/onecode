@@ -205,7 +205,7 @@ show_banner() {
     echo "${CYAN}| |_| | | | |  __/ |__| (_) | (_| |  __/${NC}"
     echo "${CYAN} \\___/|_| |_|\\___|\\____\\___/ \\__,_|\\___|${NC}"
     echo ""
-    echo "  ${BOLD}OneCode${NC} v${VERSION} — ${DIM}AI 原生 IDE，浏览器里写代码${NC}"
+    echo "  ${BOLD}OneCode${NC} v${VERSION} — ${DIM}AI Agent Terminal，浏览器里的智能体终端${NC}"
     echo "  ${DIM}Backend: claude-code (Anthropic Claude) · opencode (MIT)${NC}"
     echo "  ${DIM}Platform: Linux amd64/arm64 · macOS Intel/Apple Silicon${NC}"
     echo ""

@@ -1,7 +1,7 @@
 {
   "name": "onecode",
   "version": "0.5.0",
-  "description": "OneCode — AI 原生 IDE，以 Claude Code 为内核的容器化开发环境",
+  "description": "OneCode — AI Agent Terminal，以 Claude Code 为内核的容器化开发环境",
   "private": true,
   "scripts": {
     "dev": "node agent-runtime/gateway/index.js",

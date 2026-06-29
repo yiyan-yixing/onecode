@@ -50,7 +50,7 @@
 | |_| | | | |  __/ |__| (_) | (_| |  __/
  \___/|_| |_|\___|\____\___/ \__,_|\___|
 
-  OneCode v0.4.0 — AI 原生 IDE
+  OneCode v0.4.0 — AI Agent Terminal
 
   AI backend: claude-code (Anthropic Claude) | opencode (MIT)
   Support: Linux amd64/arm64 · macOS Intel/Apple Silicon
