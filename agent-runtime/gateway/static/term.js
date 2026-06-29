@@ -39,6 +39,10 @@
     allowProposedApi: true,
     allowTransparency: true,
     convertEol: false,
+    // xterm 内置滚动调参（双重保障）
+    scrollSensitivity: 10,
+    fastScrollModifier: 'alt',
+    fastScrollSensitivity: 20,
   });
 
   // Fit addon
@@ -50,6 +54,36 @@
   term.loadAddon(webLinksAddon);
 
   term.open(termEl);
+
+  // ── 自定义滚轮加速器（必须在 term.open 之后）──
+  //
+  // xterm DOM 结构：.xterm > [.xterm-viewport, .xterm-screen]
+  // 用户鼠标在 .xterm-screen（canvas），wheel 事件从 .xterm-screen 冒泡到 .xterm。
+  // .xterm-viewport 是 .xterm-screen 的兄弟节点，不是父节点，
+  // 所以监听 .xterm-viewport 永远收不到事件！
+  //
+  // 正确做法：在 .xterm 元素上用 capture:true 拦截，
+  // 取消 xterm 的默认处理，直接操作 viewport.scrollTop 实现加速。
+  var SCROLL_BOOST = 5;
+  var FAST_BOOST = 15;
+  var _xtermEl = termEl.querySelector('.xterm');
+  var _vpBoost = termEl.querySelector('.xterm-viewport');
+  if (_xtermEl && _vpBoost) {
+    _xtermEl.addEventListener('wheel', function (e) {
+      // vim/tmux 鼠标追踪模式：滚轮应发给 PTY，不要拦截
+      if (term.coreMouseService && term.coreMouseService.areMouseEventsActive) return;
+      // 水平滚动或 Shift 滚动不处理
+      if (e.deltaY === 0 || e.shiftKey) return;
+      var boost = e.altKey ? FAST_BOOST : SCROLL_BOOST;
+      var boosted = e.deltaY * boost;
+      var newTop = Math.max(0, Math.min(_vpBoost.scrollTop + boosted, _vpBoost.scrollHeight - _vpBoost.clientHeight));
+      if (newTop !== _vpBoost.scrollTop) {
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        _vpBoost.scrollTop = newTop;
+      }
+    }, { capture: true, passive: false });
+  }
 
   // WebGL addon (skip on Safari — rendering bugs with scroll, use canvas fallback)
   var isSafari = /^((?!chrome|android).)*safari/i.test(navigator.userAgent);

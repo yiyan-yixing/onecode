@@ -1,0 +1,1471 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>OneCode Desktop — Prototype v2</title>
+<style>
+/* ═══════════════════════════════════════════════════════
+   OneCode Desktop · Warm Terminal Aesthetic
+   Inspired by Claude Cowork — powerful autonomy, gentle experience
+   ═══════════════════════════════════════════════════════ */
+
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;600;700&family=DM+Sans:wght@400;500;600;700&family=DM+Serif+Display&display=swap');
+
+:root {
+  /* ── Warm Surface Layers (Cowork-inspired) ── */
+  --cream:     #F8F6F1;
+  --linen:     #F2EFEA;
+  --sand:      #EAE6DF;
+  --stone:     #DDD9D0;
+  --clay:      #C5BFB4;
+
+  /* ── Terminal Depths (dark prompt blocks) ── */
+  --void:      #111119;
+  --abyss:     #16161F;
+  --deep:      #1C1C28;
+  --surface:   #222230;
+  --raised:    #2A2A3A;
+  --elevated:  #343446;
+  --highlight: #3E3E52;
+
+  /* ── Warm Emerald (softened from original) ── */
+  --em:        #059669;
+  --em-bright: #10B981;
+  --em-glow:   rgba(16,185,129,.18);
+  --em-ghost:  rgba(16,185,129,.08);
+  --em-soft:   rgba(5,150,105,.06);
+
+  /* ── Cowork Accent Palette ── */
+  --lavender:  #A78BFA;
+  --soft-blue: #818CF8;
+  --peach:     #F9A875;
+  --rose:      #F472B6;
+  --sky:       #7DD3FC;
+  --sage:      #86B5A0;
+
+  /* ── Text on Warm ── */
+  --tx-warm:   #2D2A24;
+  --tx-warm2:  #5C584E;
+  --tx-warm3:  #8C867A;
+  --tx-warm4:  #B5B0A4;
+
+  /* ── Text on Dark ── */
+  --tx:        #D4DFF0;
+  --tx2:       #8B9FC0;
+  --tx3:       #546380;
+
+  /* ── System ── */
+  --r:         10px;
+  --r-sm:      6px;
+  --font-ui:   'DM Sans', system-ui, sans-serif;
+  --font-term: 'JetBrains Mono', 'SF Mono', monospace;
+  --font-display: 'DM Serif Display', serif;
+  --transition: .25s cubic-bezier(.4,0,.2,1);
+}
+
+* { margin:0; padding:0; box-sizing:border-box; }
+
+html, body {
+  height: 100%;
+  overflow: hidden;
+  background: var(--cream);
+  color: var(--tx-warm);
+  font-family: var(--font-ui);
+  font-size: 13px;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ── Subtle Warm Texture ── */
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  background:
+    radial-gradient(ellipse 60% 40% at 10% 20%, rgba(167,139,250,.04) 0%, transparent 50%),
+    radial-gradient(ellipse 50% 50% at 90% 80%, rgba(249,168,117,.03) 0%, transparent 40%),
+    radial-gradient(ellipse 80% 60% at 50% 50%, rgba(5,150,105,.02) 0%, transparent 60%);
+  pointer-events: none;
+  z-index: 0;
+}
+
+/* ══════════════════════════════════════════
+   APP SHELL
+   ══════════════════════════════════════════ */
+
+.app {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  position: relative;
+  z-index: 1;
+}
+
+/* ══════════════════════════════════════════
+   TITLE BAR — Warm Native Feel
+   ══════════════════════════════════════════ */
+
+.titlebar {
+  display: flex;
+  align-items: center;
+  height: 52px;
+  background: var(--linen);
+  border-bottom: 1px solid var(--sand);
+  padding: 0 16px;
+  gap: 10px;
+  flex-shrink: 0;
+  user-select: none;
+}
+
+.traffic {
+  display: flex;
+  gap: 7px;
+  flex-shrink: 0;
+}
+.traffic-dot {
+  width: 13px;
+  height: 13px;
+  border-radius: 50%;
+  transition: var(--transition);
+  cursor: pointer;
+}
+.traffic-close { background: #FF5F57; border: 1px solid #E0443E; }
+.traffic-min   { background: #FEBC2E; border: 1px solid #DEA123; }
+.traffic-max   { background: #28C840; border: 1px solid #1AAB29; }
+.traffic-dot:hover { filter: brightness(1.15); }
+
+.titlebar-brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-left: 10px;
+}
+.brand-icon {
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  background: linear-gradient(135deg, var(--em), var(--sage));
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  font-weight: 800;
+  color: #fff;
+  font-family: var(--font-term);
+  letter-spacing: -.5px;
+  box-shadow: 0 1px 3px rgba(5,150,105,.2);
+}
+.brand-name {
+  font-family: var(--font-display);
+  font-size: 18px;
+  font-weight: 400;
+  color: var(--tx-warm);
+  letter-spacing: .3px;
+}
+.brand-tag {
+  font-size: 10px;
+  color: var(--tx-warm3);
+  padding: 3px 8px;
+  border-radius: 12px;
+  background: var(--sand);
+  font-weight: 500;
+}
+.titlebar-spacer { flex: 1; }
+
+/* CC Status pills — warm style */
+.cc-pills {
+  display: flex;
+  gap: 6px;
+}
+.cc-pill {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--tx-warm3);
+  padding: 4px 8px;
+  border-radius: 8px;
+  background: var(--cream);
+  border: 1px solid var(--sand);
+  cursor: pointer;
+  transition: var(--transition);
+}
+.cc-pill:hover {
+  background: var(--sand);
+  color: var(--tx-warm2);
+  border-color: var(--clay);
+}
+.cc-pill.active {
+  color: var(--em);
+  border-color: rgba(5,150,105,.2);
+  background: var(--em-soft);
+}
+.cc-pill .n {
+  font-family: var(--font-term);
+  font-weight: 700;
+  font-size: 10px;
+}
+.cc-pill .n.has { color: var(--em); }
+
+/* ══════════════════════════════════════════
+   TAB BAR — Warm Card-Style Tabs
+   ══════════════════════════════════════════ */
+
+.tab-bar-area {
+  display: flex;
+  align-items: center;
+  height: 44px;
+  background: var(--cream);
+  border-bottom: 1px solid var(--sand);
+  padding: 0 16px;
+  gap: 6px;
+  flex-shrink: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.tab-bar-area::-webkit-scrollbar { display: none; }
+
+.tab-item {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 14px;
+  border-radius: var(--r);
+  cursor: pointer;
+  color: var(--tx-warm3);
+  font-size: 12px;
+  font-weight: 500;
+  white-space: nowrap;
+  transition: all var(--transition);
+  flex-shrink: 0;
+  position: relative;
+  border: 1px solid transparent;
+}
+
+.tab-item:hover:not(.active) {
+  background: var(--linen);
+  color: var(--tx-warm2);
+  border-color: var(--sand);
+}
+
+.tab-item.active {
+  background: #fff;
+  color: var(--tx-warm);
+  border-color: var(--sand);
+  box-shadow: 0 1px 3px rgba(0,0,0,.06), 0 0 0 1px rgba(255,255,255,.8);
+}
+
+/* Tab inner left accent bar */
+.tab-item.active::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 6px;
+  bottom: 6px;
+  width: 3px;
+  border-radius: 2px;
+  background: var(--em);
+}
+
+/* Tab dot — status indicator */
+.tab-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  transition: var(--transition);
+}
+.tab-dot.running {
+  background: var(--em);
+  box-shadow: 0 0 0 2px rgba(5,150,105,.15);
+}
+.tab-dot.exited {
+  background: var(--clay);
+}
+
+/* Tab close */
+.tab-close {
+  width: 16px;
+  height: 16px;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0;
+  transition: var(--transition);
+  color: var(--tx-warm4);
+  font-size: 12px;
+  flex-shrink: 0;
+}
+.tab-item:hover .tab-close,
+.tab-item.active .tab-close { opacity: .5; }
+.tab-close:hover {
+  opacity: 1;
+  background: var(--rose);
+  color: #fff;
+}
+
+/* Shortcut badge on hover */
+.tab-shortcut {
+  font-family: var(--font-term);
+  font-size: 9px;
+  color: var(--tx-warm4);
+  padding: 1px 4px;
+  border-radius: 3px;
+  background: var(--sand);
+  border: 1px solid var(--stone);
+  flex-shrink: 0;
+  line-height: 1;
+}
+
+/* New tab button — warm style */
+.tab-new {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 12px;
+  border-radius: var(--r);
+  cursor: pointer;
+  color: var(--tx-warm3);
+  font-size: 12px;
+  font-weight: 500;
+  transition: var(--transition);
+  flex-shrink: 0;
+  border: 1px dashed var(--clay);
+  background: transparent;
+}
+.tab-new:hover {
+  color: var(--em);
+  border-color: var(--em);
+  background: var(--em-soft);
+}
+.tab-new svg {
+  width: 14px;
+  height: 14px;
+}
+
+/* Tab animations */
+@keyframes tabSlideIn {
+  from { opacity: 0; transform: translateY(-4px) scale(.96); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+.tab-item.entering { animation: tabSlideIn .2s ease forwards; }
+
+@keyframes tabSlideOut {
+  from { opacity: 1; transform: scale(1); }
+  to   { opacity: 0; transform: scale(.92); }
+}
+.tab-item.exiting { animation: tabSlideOut .15s ease forwards; pointer-events: none; }
+
+/* ══════════════════════════════════════════
+   MAIN CONTENT — Terminal is the Dark Card
+   ══════════════════════════════════════════ */
+
+.content {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--cream);
+  gap: 0;
+}
+
+/* ── Terminal Panel (dark prompt block) ── */
+.term-panel {
+  flex: 1;
+  min-width: 200px;
+  display: flex;
+  flex-direction: column;
+  position: relative;
+  background: var(--abyss);
+  /* Subtle inset shadow for "embedded in warm surface" feel */
+  box-shadow: inset 0 1px 4px rgba(0,0,0,.15);
+}
+
+.term-container {
+  flex: 1;
+  position: relative;
+  overflow: hidden;
+}
+
+.term-instance {
+  position: absolute;
+  inset: 0;
+  display: none;
+  flex-direction: column;
+  overflow: hidden;
+}
+.term-instance.active { display: flex; }
+
+/* Terminal content */
+.term-content {
+  flex: 1;
+  overflow-y: auto;
+  padding: 16px 20px;
+  font-family: var(--font-term);
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--tx);
+  background: var(--abyss);
+  scrollbar-width: none;
+}
+.term-content::-webkit-scrollbar { width: 0; }
+
+/* Very subtle scanline */
+.term-instance::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: repeating-linear-gradient(
+    0deg,
+    transparent,
+    transparent 3px,
+    rgba(255,255,255,.006) 3px,
+    rgba(255,255,255,.006) 4px
+  );
+  pointer-events: none;
+  z-index: 2;
+}
+
+/* Term line styles */
+.t-prompt  { color: var(--em-bright); font-weight: 600; }
+.t-cmd     { color: var(--tx); }
+.t-output  { color: var(--tx2); }
+.t-dim     { color: var(--tx3); }
+.t-bold    { color: var(--tx); font-weight: 700; }
+.t-green   { color: var(--em-bright); }
+.t-amber   { color: #FBBF24; }
+.t-red     { color: #FF6B6B; }
+.t-cyan    { color: var(--sky); }
+.t-purple  { color: var(--lavender); }
+.t-blue    { color: var(--soft-blue); }
+.t-link    { color: var(--sky); text-decoration: underline; cursor: pointer; }
+.t-soft    { color: var(--sage); }
+
+/* Cursor */
+.cursor-blink {
+  display: inline-block;
+  width: 8px;
+  height: 16px;
+  background: var(--em);
+  animation: cursorBlink 1.1s step-end infinite;
+  vertical-align: text-bottom;
+  margin-left: 2px;
+  border-radius: 1px;
+}
+@keyframes cursorBlink { 0%,100%{opacity:1}50%{opacity:0} }
+
+/* Exited terminal overlay — warm card style */
+.term-exited-overlay {
+  position: absolute;
+  inset: 0;
+  background: rgba(22,22,31,.88);
+  backdrop-filter: blur(12px);
+  display: none;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: 10px;
+  z-index: 10;
+}
+.term-exited-overlay.visible { display: flex; }
+
+.exited-icon {
+  width: 44px;
+  height: 44px;
+  border-radius: 12px;
+  background: var(--raised);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 22px;
+  opacity: .5;
+}
+.exited-text { font-size: 13px; font-weight: 600; color: var(--tx2); }
+.exited-code { font-family: var(--font-term); font-size: 11px; color: var(--tx3); }
+
+.restart-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 18px;
+  border: 1px solid rgba(5,150,105,.25);
+  border-radius: var(--r);
+  background: rgba(5,150,105,.08);
+  color: var(--em-bright);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: var(--transition);
+  font-family: var(--font-ui);
+}
+.restart-btn:hover {
+  background: rgba(5,150,105,.15);
+  border-color: var(--em);
+  box-shadow: 0 0 20px rgba(5,150,105,.1);
+}
+
+/* ── Mention Popup ── */
+.mention-pop {
+  display: none;
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  max-height: 220px;
+  overflow-y: auto;
+  background: rgba(22,22,31,.96);
+  backdrop-filter: blur(20px);
+  border-top: 1px solid rgba(255,255,255,.06);
+  z-index: 20;
+  padding: 6px 0;
+  animation: mentionUp .15s ease;
+}
+.mention-pop.visible { display: block; }
+@keyframes mentionUp {
+  from { opacity:0; transform:translateY(4px); }
+  to   { opacity:1; transform:translateY(0); }
+}
+
+.mp-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 16px;
+  cursor: pointer;
+  transition: background .1s;
+}
+.mp-item:hover, .mp-item.sel { background: rgba(5,150,105,.08); }
+
+.mp-icon {
+  width: 24px;
+  height: 24px;
+  border-radius: 7px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+.mp-name { font-size: 12px; font-weight: 600; color: var(--tx2); }
+.mp-id   { font-family: var(--font-term); font-size: 10px; color: var(--tx3); }
+.mp-mission { font-size: 10px; color: var(--tx3); margin-left: auto; max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* ── Resize Handle ── */
+.resize-h {
+  width: 3px;
+  cursor: col-resize;
+  background: var(--sand);
+  position: relative;
+  flex-shrink: 0;
+  z-index: 5;
+  transition: var(--transition);
+}
+.resize-h:hover, .resize-h.dragging {
+  background: var(--em);
+  width: 4px;
+}
+
+/* ── Preview Panel — Warm Document View ── */
+.preview-panel {
+  width: 0;
+  min-width: 0;
+  overflow: hidden;
+  border-left: 1px solid var(--sand);
+  transition: width .3s cubic-bezier(.4,0,.2,1), min-width .3s cubic-bezier(.4,0,.2,1);
+  display: flex;
+  flex-direction: column;
+  background: #fff;
+}
+.preview-panel.open {
+  min-width: 340px;
+  width: 38%;
+}
+
+.preview-hdr {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 16px;
+  height: 44px;
+  background: var(--cream);
+  border-bottom: 1px solid var(--sand);
+  flex-shrink: 0;
+}
+.preview-hdr-icon { width: 16px; height: 16px; color: var(--tx-warm3); }
+.preview-hdr-title {
+  flex: 1;
+  font-family: var(--font-display);
+  font-size: 14px;
+  color: var(--tx-warm2);
+}
+.preview-close {
+  width: 26px;
+  height: 26px;
+  border: none;
+  background: transparent;
+  color: var(--tx-warm4);
+  cursor: pointer;
+  border-radius: var(--r-sm);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: var(--transition);
+}
+.preview-close:hover { background: var(--sand); color: var(--tx-warm2); }
+
+.preview-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 24px 28px;
+  background: #fff;
+}
+
+/* Markdown — Cowork document style */
+.md {
+  max-width: 580px;
+  margin: 0 auto;
+  line-height: 1.8;
+  color: var(--tx-warm);
+}
+.md h1 {
+  font-family: var(--font-display);
+  font-size: 1.7em;
+  margin: 0 0 .5em;
+  color: var(--tx-warm);
+}
+.md h2 {
+  font-family: var(--font-display);
+  font-size: 1.25em;
+  margin: 1em 0 .35em;
+  padding-bottom: .15em;
+  border-bottom: 1px solid var(--sand);
+  color: var(--tx-warm);
+}
+.md p { margin: .5em 0; color: var(--tx-warm2); }
+.md a { color: var(--em); text-decoration: none; font-weight: 500; }
+.md a:hover { text-decoration: underline; }
+.md strong { color: var(--tx-warm); font-weight: 700; }
+.md code {
+  font-family: var(--font-term);
+  font-size: .85em;
+  background: var(--linen);
+  padding: 2px 6px;
+  border-radius: 4px;
+  color: var(--em);
+  border: 1px solid var(--sand);
+}
+.md pre {
+  background: var(--abyss);
+  color: var(--tx);
+  border: 1px solid var(--deep);
+  border-radius: var(--r);
+  margin: .7em 0;
+  overflow-x: auto;
+}
+.md pre code {
+  display: block;
+  padding: 14px 16px;
+  background: 0;
+  color: var(--tx);
+  font-size: .85em;
+  line-height: 1.65;
+  border: none;
+}
+.md ul, .md ol { padding-left: 1.6em; margin: .4em 0; color: var(--tx-warm2); }
+.md li { margin: .2em 0; }
+.md blockquote {
+  border-left: 3px solid var(--em);
+  margin: .6em 0;
+  padding: .15em 0 .15em 16px;
+  color: var(--tx-warm2);
+  background: var(--em-soft);
+  border-radius: 0 var(--r) var(--r) 0;
+}
+.md table { border-collapse: collapse; width: 100%; margin: .6em 0; font-size: .92em; }
+.md th, .md td { border: 1px solid var(--sand); padding: 6px 12px; text-align: left; }
+.md th { background: var(--linen); font-weight: 600; color: var(--tx-warm); }
+.md td { color: var(--tx-warm2); }
+
+/* ── Sidebar — Warm File & Agent List ── */
+.sidebar {
+  width: 260px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--linen);
+  border-left: 1px solid var(--sand);
+  transition: width .25s cubic-bezier(.4,0,.2,1);
+}
+.sidebar.collapsed { width: 0; overflow: hidden; border: none; }
+
+.sidebar-hdr {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 14px;
+  height: 44px;
+  background: var(--cream);
+  border-bottom: 1px solid var(--sand);
+  flex-shrink: 0;
+}
+.sidebar-hdr-icon { width: 16px; height: 16px; color: var(--tx-warm3); }
+.sidebar-hdr-title {
+  flex: 1;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--tx-warm3);
+  text-transform: uppercase;
+  letter-spacing: 1px;
+}
+.sidebar-collapse {
+  width: 26px; height: 26px; border: none; background: 0; color: var(--tx-warm4);
+  cursor: pointer; border-radius: var(--r-sm); display: flex; align-items: center; justify-content: center;
+  transition: var(--transition);
+}
+.sidebar-collapse:hover { background: var(--sand); color: var(--tx-warm2); }
+
+/* File section — Cowork ASCII tree style */
+.file-section {
+  flex-shrink: 0;
+  overflow-y: auto;
+  max-height: 50%;
+  border-bottom: 1px solid var(--sand);
+}
+
+.file-hdr {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 14px;
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--tx-warm4);
+  text-transform: uppercase;
+  letter-spacing: 1px;
+}
+
+/* ASCII tree style (Cowork-inspired) */
+.file-tree {
+  padding: 4px 14px;
+  font-family: var(--font-term);
+  font-size: 12px;
+  line-height: 1.7;
+  color: var(--tx-warm3);
+}
+.tree-dir  { color: var(--tx-warm2); font-weight: 600; cursor: pointer; }
+.tree-dir:hover { color: var(--em); }
+.tree-file { color: var(--tx-warm3); cursor: pointer; }
+.tree-file:hover { color: var(--em-bright); }
+.tree-line { color: var(--clay); }
+.tree-ext  { font-size: 9px; color: var(--tx-warm4); padding: 0px 4px; border-radius: 3px; background: var(--sand); margin-left: 4px; }
+
+/* Agent list — warm card style */
+.agent-hdr {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 14px;
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--tx-warm4);
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.agent-hdr:hover { color: var(--tx-warm3); }
+
+.agent-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 4px 6px;
+}
+
+.agent-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  margin: 1px 0;
+  border-radius: var(--r-sm);
+  cursor: pointer;
+  transition: var(--transition);
+}
+.agent-item:hover {
+  background: var(--sand);
+}
+.agent-item.active {
+  background: var(--em-soft);
+  box-shadow: 0 0 0 1px rgba(5,150,105,.15);
+}
+
+.agent-icon {
+  width: 26px;
+  height: 26px;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  font-weight: 700;
+  flex-shrink: 0;
+  transition: transform .12s;
+}
+.agent-item:hover .agent-icon { transform: scale(1.08); }
+.agent-name {
+  flex: 1;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--tx-warm2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.agent-badge {
+  font-size: 8px;
+  color: var(--tx-warm4);
+  padding: 2px 5px;
+  border-radius: 6px;
+  background: var(--cream);
+  border: 1px solid var(--sand);
+  flex-shrink: 0;
+  font-weight: 700;
+  font-family: var(--font-term);
+}
+
+/* ══════════════════════════════════════════
+   STATUS BAR — Warm Minimal
+   ══════════════════════════════════════════ */
+
+.statusbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 28px;
+  background: var(--linen);
+  border-top: 1px solid var(--sand);
+  padding: 0 16px;
+  flex-shrink: 0;
+  font-size: 11px;
+  color: var(--tx-warm3);
+}
+.statusbar-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+}
+.statusbar-spacer { flex: 1; }
+.statusbar-kbd {
+  font-family: var(--font-term);
+  font-size: 9px;
+  padding: 2px 5px;
+  border-radius: 4px;
+  background: var(--cream);
+  border: 1px solid var(--sand);
+  color: var(--tx-warm4);
+}
+
+/* ══════════════════════════════════════════
+   CC POPUP — Warm Dropdown
+   ══════════════════════════════════════════ */
+
+.cc-popup {
+  display: none;
+  position: absolute;
+  top: 52px;
+  right: 16px;
+  background: rgba(255,255,255,.97);
+  backdrop-filter: blur(20px);
+  border: 1px solid var(--sand);
+  border-radius: 12px;
+  width: 320px;
+  max-height: 45vh;
+  overflow-y: auto;
+  z-index: 100;
+  padding: 12px 16px;
+  animation: popIn .15s ease;
+  box-shadow: 0 8px 32px rgba(0,0,0,.1), 0 0 0 1px rgba(255,255,255,.5);
+}
+.cc-popup.visible { display: block; }
+
+@keyframes popIn {
+  from { opacity:0; transform:translateY(-6px) scale(.97); }
+  to   { opacity:1; transform:translateY(0) scale(1); }
+}
+
+.cc-popup h3 {
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--tx-warm4);
+  text-transform: uppercase;
+  letter-spacing: .8px;
+  margin: 10px 0 4px;
+}
+.cc-popup h3:first-child { margin-top: 0; }
+.cc-item {
+  display: flex;
+  gap: 6px;
+  align-items: baseline;
+  padding: 4px 0;
+  color: var(--tx-warm2);
+  font-size: 11px;
+}
+.cc-item .cn { color: var(--em); font-weight: 600; white-space: nowrap; flex-shrink: 0; font-family: var(--font-term); }
+.cc-item .cd { color: var(--tx-warm3); font-size: 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cc-scope {
+  font-size: 8px;
+  padding: 2px 4px;
+  border-radius: 4px;
+  font-weight: 700;
+  flex-shrink: 0;
+  font-family: var(--font-term);
+}
+.cc-scope.project { background: var(--em-soft); color: var(--em); border: 1px solid rgba(5,150,105,.15); }
+.cc-scope.global  { background: var(--sand); color: var(--tx-warm4); border: 1px solid var(--stone); }
+
+/* ══════════════════════════════════════════
+   TOAST — Warm Notification
+   ══════════════════════════════════════════ */
+
+.toast {
+  position: fixed;
+  bottom: 44px;
+  left: 50%;
+  transform: translateX(-50%) translateY(80px);
+  background: #fff;
+  border: 1px solid var(--sand);
+  border-radius: 12px;
+  padding: 10px 20px;
+  font-size: 12px;
+  color: var(--tx-warm2);
+  z-index: 200;
+  opacity: 0;
+  transition: transform .3s cubic-bezier(.4,0,.2,1), opacity .3s;
+  pointer-events: none;
+  box-shadow: 0 4px 20px rgba(0,0,0,.08), 0 0 0 1px rgba(255,255,255,.5);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.toast.visible {
+  transform: translateX(-50%) translateY(0);
+  opacity: 1;
+}
+.toast-icon { color: var(--em); font-size: 14px; }
+
+/* ══════════════════════════════════════════
+   CUSTOM SCROLLBAR
+   ══════════════════════════════════════════ */
+
+.custom-scroll::-webkit-scrollbar { width: 5px; }
+.custom-scroll::-webkit-scrollbar-track { background: transparent; }
+.custom-scroll::-webkit-scrollbar-thumb {
+  background: var(--clay);
+  border-radius: 3px;
+}
+.custom-scroll::-webkit-scrollbar-thumb:hover { background: var(--sage); }
+</style>
+</head>
+<body>
+
+<div class="app">
+  <!-- ═══ TITLE BAR ═══ -->
+  <div class="titlebar">
+    <div class="traffic">
+      <div class="traffic-dot traffic-close"></div>
+      <div class="traffic-dot traffic-min"></div>
+      <div class="traffic-dot traffic-max"></div>
+    </div>
+    <div class="titlebar-brand">
+      <div class="brand-icon">OC</div>
+      <span class="brand-name">OneCode</span>
+      <span class="brand-tag">Desktop</span>
+    </div>
+    <div class="titlebar-spacer"></div>
+    <div class="cc-pills" id="ccPills">
+      <div class="cc-pill" data-cc="skills">
+        <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"><path d="M8 1l2 4 4.5.7-3.3 3.1.8 4.5L8 11l-4 2.3.8-4.5L1.5 5.7 6 5z"/></svg>
+        <span class="n has">5</span>
+      </div>
+      <div class="cc-pill" data-cc="hooks">
+        <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"><path d="M6 2v4l-3 3v2h4v3l1 2 1-2v-3h4V9l-3-3V2"/><rect x="5" y="1" width="6" height="2" rx="1"/></svg>
+        <span class="n has">3</span>
+      </div>
+      <div class="cc-pill" data-cc="plugins">
+        <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"><rect x="2" y="2" width="5" height="5" rx="1"/><rect x="9" y="2" width="5" height="5" rx="1"/><rect x="2" y="9" width="5" height="5" rx="1"/><rect x="9" y="9" width="5" height="5" rx="1"/></svg>
+        <span class="n has">2</span>
+      </div>
+      <div class="cc-pill" data-cc="tasks">
+        <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"><circle cx="8" cy="8" r="6"/><polyline points="8 4 8 8 11 9.5"/></svg>
+        <span class="n">1</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══ TAB BAR ═══ -->
+  <div class="tab-bar-area" id="tabBar"></div>
+
+  <!-- ═══ MAIN CONTENT ═══ -->
+  <div class="content">
+    <div class="term-panel">
+      <div class="term-container" id="termContainer"></div>
+      <div class="mention-pop" id="mentionPop"></div>
+    </div>
+    <div class="resize-h" id="resizeH"></div>
+    <div class="preview-panel" id="previewPanel">
+      <div class="preview-hdr">
+        <svg class="preview-hdr-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><path d="M1 8s3-5 7-5 7 5 7 5-3 5-7 5-7-5-7-5z"/><circle cx="8" cy="8" r="2"/></svg>
+        <span class="preview-hdr-title" id="previewTitle">Preview</span>
+        <button class="preview-close" id="previewClose" title="Esc">
+          <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><line x1="4" y1="4" x2="12" y2="12"/><line x1="12" y1="4" x2="4" y2="12"/></svg>
+        </button>
+      </div>
+      <div class="preview-body custom-scroll" id="previewBody"></div>
+    </div>
+    <div class="sidebar" id="sidebar">
+      <div class="sidebar-hdr">
+        <svg class="sidebar-hdr-icon" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><path d="M2 3h4l2 2h6v8H2z"/></svg>
+        <span class="sidebar-hdr-title">Files</span>
+        <button class="sidebar-collapse" id="sidebarCollapse" title="⌘B">
+          <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M11 3L6 8l5 5"/></svg>
+        </button>
+      </div>
+      <div class="file-section custom-scroll" id="fileSection"></div>
+      <div class="agent-hdr" id="agentHdr">
+        <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"><circle cx="8" cy="6" r="3"/><path d="M3 14c0-3 2.2-4 5-4s5 1 5 4"/></svg>
+        <span>Agents</span>
+      </div>
+      <div class="agent-list custom-scroll" id="agentList"></div>
+    </div>
+  </div>
+
+  <!-- ═══ STATUS BAR ═══ -->
+  <div class="statusbar">
+    <div class="statusbar-item">
+      <div class="statusbar-dot" style="background:var(--em);box-shadow:0 0 4px rgba(5,150,105,.3)"></div>
+      <span>3 terminals</span>
+    </div>
+    <div class="statusbar-item">
+      <span style="color:var(--em)">●</span>
+      <span>2 running</span>
+    </div>
+    <div class="statusbar-item">
+      <span style="color:var(--clay)">○</span>
+      <span>1 exited</span>
+    </div>
+    <div class="statusbar-spacer"></div>
+    <span class="statusbar-kbd">⌘T</span> <span style="margin-right:6px">New</span>
+    <span class="statusbar-kbd">⌘W</span> <span style="margin-right:6px">Close</span>
+    <span class="statusbar-kbd">⌘1-9</span> <span>Switch</span>
+  </div>
+</div>
+
+<!-- CC Popup -->
+<div class="cc-popup" id="ccPopup"></div>
+
+<!-- Toast -->
+<div class="toast" id="toast">
+  <span class="toast-icon">✓</span>
+  <span id="toastMsg"></span>
+</div>
+
+<script>
+// ══════════════════════════════════════════
+// State & Data
+// ══════════════════════════════════════════
+
+const state = { tabs: [], activeId: null, nextId: 1, mentionVisible: false, ccPopupOpen: null, previewOpen: false, sidebarOpen: true };
+
+const AGENTS = [
+  { id:'ceo', name:'CEO', description:'战略规划、重大决策', color:'#F97316', icon:'👑' },
+  { id:'architect', name:'Architect', description:'技术选型、架构设计', color:'#8B5CF6', icon:'🏗' },
+  { id:'dev', name:'Dev', description:'代码编写、Bug 修复', color:'#059669', icon:'⚡' },
+  { id:'pm', name:'PM', description:'需求定义、优先级排序', color:'#3B82F6', icon:'📋' },
+  { id:'qa', name:'QA', description:'测试用例、质量把关', color:'#EF4444', icon:'🔍' },
+  { id:'ops', name:'Ops', description:'CI/CD、监控告警', color:'#D97706', icon:'🚀' },
+  { id:'designer', name:'Designer', description:'UI/UX 设计', color:'#EC4899', icon:'🎨' },
+  { id:'data', name:'Data', description:'埋点设计、效果分析', color:'#0891B2', icon:'📊' },
+];
+
+const CC_STATUS = {
+  skills: [{name:'deep-research',description:'Deep research harness',scope:'project'},{name:'code-review',description:'Review code changes',scope:'project'},{name:'verify',description:'Verify code changes',scope:'project'},{name:'frontend-design',description:'Create frontend interfaces',scope:'project'},{name:'skill-creator',description:'Create new skills',scope:'global'}],
+  hooks: {'PreToolUse':[{command:'validate-params',scope:'project'}],'PostToolUse':[{command:'log-usage',scope:'global'}],'Stop':[{command:'summary',scope:'project'}]},
+  plugins: [{name:'filesystem',type:'stdio',scope:'project'},{name:'github',type:'stdio',scope:'global'}],
+  tasks: [{name:'health-check',cron:'*/5 * * * *',scope:'project'}],
+};
+
+const TERM_CONTENTS = {
+main: `<span class="t-prompt">╭─</span> <span class="t-bold">OneCode</span> <span class="t-dim">· AI 原生 IDE</span>
+<span class="t-prompt">╰─</span> <span class="t-dim">v0.1.0 · claude-sonnet-4-6 · /workspace</span>
+
+<span class="t-green">✓</span> <span class="t-output">Claude Code connected · bypass permissions mode</span>
+<span class="t-dim">──────────────────────────────────────────────────</span>
+
+<span class="t-prompt">></span> <span class="t-cmd">@dev 重构 pty.js 为 MultiPtyManager</span>
+
+<span class="t-soft">⚡ Dev</span> <span class="t-output">is working on this task...</span>
+
+<span class="t-dim">Reading agent-runtime/gateway/pty.js (403 lines)...</span>
+
+<span class="t-bold">Changes needed:</span>
+
+  <span class="t-cyan">1.</span> <span class="t-output">PtyManager → MultiPtyManager with HashMap&lt;Uuid, Slot&gt;</span>
+  <span class="t-cyan">2.</span> <span class="t-output">Add TerminalSlot struct with independent ring buffer</span>
+  <span class="t-cyan">3.</span> <span class="t-output">Port ring buffer logic (trim, replay, flush)</span>
+  <span class="t-cyan">4.</span> <span class="t-output">Add health monitor for zombie process detection</span>
+
+<span class="t-bold">Created:</span> <span class="t-link">src-tauri/src/pty/mod.rs</span> <span class="t-dim">(180 lines)</span>
+<span class="t-bold">Created:</span> <span class="t-link">src-tauri/src/pty/slot.rs</span> <span class="t-dim">(120 lines)</span>
+
+<span class="t-green">✓</span> <span class="t-output">Rust PTY module complete · 380 lines</span>
+
+<span class="t-prompt">></span> <span class="cursor-blink"></span>`,
+
+bugfix: `<span class="t-prompt">╭─</span> <span class="t-bold">OneCode</span> <span class="t-dim">· Bug Fix Session</span>
+<span class="t-prompt">╰─</span> <span class="t-dim">v0.1.0 · claude-sonnet-4-6 · /workspace</span>
+
+<span class="t-green">✓</span> <span class="t-output">Claude Code connected · bypass permissions mode</span>
+<span class="t-dim">──────────────────────────────────────────────────</span>
+
+<span class="t-prompt">></span> <span class="t-cmd">@qa 排查终端 CJK 输入法问题</span>
+
+<span class="t-red">🔍 QA</span> <span class="t-output">Investigating CJK IME input issues...</span>
+
+<span class="t-bold">Root Cause:</span>
+
+<span class="t-output">xterm.js compositionHelper reads</span> <span class="t-cyan">textarea.value</span>
+<span class="t-output">on compositionend. If paste leaves residual text,
+composed text gets concatenated — duplicate input.</span>
+
+<span class="t-bold">Fix Applied:</span>
+
+  <span class="t-green">✓</span> <span class="t-output">term.js: Clear textarea after paste</span>
+  <span class="t-green">✓</span> <span class="t-output">term.js: Block keydown during composition on mobile</span>
+  <span class="t-green">✓</span> <span class="t-output">term.js: Add skipInput guard for compositionend</span>
+
+<span class="t-amber">⚠ 2 tests need update for new IME behavior</span>
+
+<span class="t-prompt">></span> <span class="cursor-blink"></span>`,
+
+'test-run': `<span class="t-prompt">╭─</span> <span class="t-bold">OneCode</span> <span class="t-dim">· Test Runner</span>
+<span class="t-prompt">╰─</span> <span class="t-dim">v0.1.0 · claude-sonnet-4-6 · /workspace</span>
+
+<span class="t-green">✓</span> <span class="t-output">Claude Code connected · bypass permissions mode</span>
+<span class="t-dim">──────────────────────────────────────────────────</span>
+
+<span class="t-prompt">></span> <span class="t-cmd">npm test</span>
+
+  <span class="t-dim">✓ pty.test.js</span>     <span class="t-green">12 passed</span>  <span class="t-dim">(340ms)</span>
+  <span class="t-dim">✓ term-ws.test.js</span>  <span class="t-green">8 passed</span>   <span class="t-dim">(120ms)</span>
+  <span class="t-dim">✓ static.test.js</span>   <span class="t-green">5 passed</span>   <span class="t-dim">(80ms)</span>
+  <span class="t-dim">✓ cc-status.test.js</span> <span class="t-green">15 passed</span>  <span class="t-dim">(450ms)</span>
+  <span class="t-dim">⚠ term.test.js</span>     <span class="t-amber">2 pending</span>  <span class="t-dim">(IME changes)</span>
+
+<span class="t-green">Tests: 40 passed</span> <span class="t-amber">2 pending</span> <span class="t-dim">· 990ms</span>
+
+<span class="t-dim">Process exited with code 0</span>`,
+
+refactor: `<span class="t-prompt">╭─</span> <span class="t-bold">OneCode</span> <span class="t-dim">· Refactor Session</span>
+<span class="t-prompt">╰─</span> <span class="t-dim">v0.1.0 · claude-sonnet-4-6 · /workspace</span>
+
+<span class="t-green">✓</span> <span class="t-output">Claude Code connected · bypass permissions mode</span>
+<span class="t-dim">──────────────────────────────────────────────────</span>
+
+<span class="t-prompt">></span> <span class="t-cmd">@architect 设计模块拆分方案</span>
+
+<span class="t-purple">🏗 Architect</span> <span class="t-output">Analyzing onecode.html (981 lines)...</span>
+
+<span class="t-bold">Proposed Module Split:</span>
+
+<span class="t-cyan">terminal/</span>
+  <span class="t-output">terminal.js</span>     <span class="t-dim">~90行</span>  <span class="t-dim">← xterm init</span>
+  <span class="t-output">tab-manager.js</span>  <span class="t-dim">~180行</span> <span class="t-dim">← 🔴 核心</span>
+  <span class="t-output">scroll-thumb.js</span> <span class="t-dim">~120行</span> <span class="t-dim">← 提取</span>
+
+<span class="t-cyan">sidebar/</span>
+  <span class="t-output">agents.js</span>       <span class="t-dim">~110行</span> <span class="t-dim">← Agent + @mention</span>
+  <span class="t-output">file-tree.js</span>     <span class="t-dim">~130行</span> <span class="t-dim">← 文件树</span>
+
+<span class="t-green">✓</span> <span class="t-output">37% 新写 / 60% 改造</span>
+
+<span class="t-prompt">></span> <span class="cursor-blink"></span>`,
+};
+
+// ═══ DOM Refs ═══
+const $ = id => document.getElementById(id);
+const tabBar = $('tabBar'), termContainer = $('termContainer'), mentionPop = $('mentionPop');
+const ccPopup = $('ccPopup'), previewPanel = $('previewPanel'), previewBody = $('previewBody');
+const previewTitle = $('previewTitle'), previewClose = $('previewClose');
+const sidebar = $('sidebar'), fileSection = $('fileSection'), agentList = $('agentList');
+const agentHdr = $('agentHdr'), toastEl = $('toast'), toastMsg = $('toastMsg');
+const resizeH = $('resizeH'), sidebarCollapse = $('sidebarCollapse');
+
+// ═══ Init ═══
+function init() {
+  createTab('main', 'main', 'running');
+  createTab('bugfix-42', 'bugfix', 'running');
+  createTab('test-run', 'test-run', 'exited');
+  createTab('refactor', 'refactor', 'running');
+  switchTab(state.tabs[0].id);
+  renderAgents();
+  renderFiles();
+  renderPreview();
+  bindEvents();
+  updateStatusBar();
+}
+
+// ═══ Tab Management ═══
+function createTab(label, contentKey, status) {
+  const id = 'tab-' + state.nextId++;
+  state.tabs.push({ id, label, contentKey, status });
+
+  const tabEl = document.createElement('div');
+  tabEl.className = 'tab-item entering';
+  tabEl.dataset.id = id;
+  tabEl.innerHTML = `
+    <div class="tab-dot ${status}"></div>
+    <span style="flex:1;overflow:hidden;text-overflow:ellipsis">${label}</span>
+    <div class="tab-close" title="⌘W">×</div>`;
+  tabEl.querySelector('.tab-close').onclick = e => { e.stopPropagation(); closeTab(id); };
+  tabEl.onclick = () => switchTab(id);
+  tabBar.appendChild(tabEl);
+  setTimeout(() => tabEl.classList.remove('entering'), 250);
+
+  const termEl = document.createElement('div');
+  termEl.className = 'term-instance';
+  termEl.dataset.id = id;
+  termEl.innerHTML = `
+    <div class="term-content custom-scroll">${TERM_CONTENTS[contentKey]||''}</div>
+    ${status==='exited'?`
+    <div class="term-exited-overlay visible">
+      <div class="exited-icon">⏻</div>
+      <div class="exited-text">Terminal exited</div>
+      <div class="exited-code">Exit code: 0</div>
+      <button class="restart-btn" onclick="restartTab('${id}')">
+        <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M2 8a6 6 0 0 1 11.3-2.5M14 2v4h-4"/><path d="M14 8a6 6 0 0 1-11.3 2.5M2 14v-4h4"/></svg>
+        Restart
+      </button>
+    </div>`:''}`;
+  termContainer.appendChild(termEl);
+  return id;
+}
+
+function switchTab(id) {
+  state.activeId = id;
+  tabBar.querySelectorAll('.tab-item').forEach(el => el.classList.toggle('active', el.dataset.id === id));
+  termContainer.querySelectorAll('.term-instance').forEach(el => el.classList.toggle('active', el.dataset.id === id));
+  updateStatusBar();
+}
+
+function closeTab(id) {
+  const tabEl = tabBar.querySelector(`.tab-item[data-id="${id}"]`);
+  if (!tabEl) return;
+  tabEl.classList.add('exiting');
+  setTimeout(() => {
+    tabEl.remove();
+    termContainer.querySelector(`.term-instance[data-id="${id}"]`)?.remove();
+    state.tabs = state.tabs.filter(t => t.id !== id);
+    if (state.activeId === id) {
+      if (state.tabs.length) switchTab(state.tabs[0].id);
+      else { const n = createTab('main','main','running'); switchTab(n); showToast('Created default terminal'); }
+    }
+    updateStatusBar();
+  }, 180);
+}
+
+function restartTab(id) {
+  const tab = state.tabs.find(t => t.id === id); if (!tab) return;
+  tab.status = 'running';
+  const tabEl = tabBar.querySelector(`.tab-item[data-id="${id}"]`);
+  if (tabEl) tabEl.querySelector('.tab-dot').className = 'tab-dot running';
+  const termEl = termContainer.querySelector(`.term-instance[data-id="${id}"]`);
+  if (termEl) termEl.querySelector('.term-exited-overlay')?.classList.remove('visible');
+  showToast('Terminal restarted');
+  updateStatusBar();
+}
+window.restartTab = restartTab;
+
+function addNewTab() {
+  if (state.tabs.length >= 10) { showToast('Max 10 terminals'); return; }
+  const keys = Object.keys(TERM_CONTENTS);
+  const key = keys[state.tabs.length % keys.length];
+  const id = createTab('term-'+(state.tabs.length+1), key, 'running');
+  switchTab(id);
+  showToast('New terminal created');
+}
+
+// ═══ Agents ═══
+function renderAgents() {
+  agentList.innerHTML = AGENTS.map(a => `
+    <div class="agent-item" data-agent="${a.id}">
+      <div class="agent-icon" style="background:${a.color}15;color:${a.color}">${a.icon||a.name[0]}</div>
+      <span class="agent-name">${a.name}</span>
+      <span class="agent-badge">${a.id}</span>
+    </div>`).join('');
+  agentList.querySelectorAll('.agent-item').forEach(el => {
+    el.onclick = () => {
+      agentList.querySelectorAll('.agent-item').forEach(e => e.classList.remove('active'));
+      el.classList.add('active');
+      showMention(el.dataset.agent);
+      setTimeout(() => el.classList.remove('active'), 400);
+    };
+  });
+}
+
+// ═══ Mention ═══
+function showMention(filter) {
+  const filtered = filter ? AGENTS.filter(a => a.id.startsWith(filter)||a.name.toLowerCase().startsWith(filter.toLowerCase())) : AGENTS;
+  if (!filtered.length) { hideMention(); return; }
+  mentionPop.innerHTML = filtered.map((a,i) => `
+    <div class="mp-item${i===0?' sel':''}" data-agent="${a.id}">
+      <div class="mp-icon" style="background:${a.color}18;color:${a.color}">${a.icon||a.name[0]}</div>
+      <span class="mp-name">${a.name}</span>
+      <span class="mp-id">@${a.id}</span>
+      <span class="mp-mission">${a.description}</span>
+    </div>`).join('');
+  mentionPop.classList.add('visible');
+  state.mentionVisible = true;
+  mentionPop.querySelectorAll('.mp-item').forEach(el => {
+    el.onclick = () => { showToast(`Mentioned @${el.dataset.agent}`); hideMention(); };
+  });
+}
+function hideMention() { mentionPop.classList.remove('visible'); state.mentionVisible = false; }
+
+// ═══ Files — ASCII Tree (Cowork-style) ═══
+function renderFiles() {
+  fileSection.innerHTML = `
+    <div class="file-hdr">Files</div>
+    <div class="file-tree">
+<span class="tree-dir">src-tauri/</span>
+<span class="tree-line">├──</span> <span class="tree-dir">src/</span>
+<span class="tree-line">│   ├──</span> <span class="tree-file">main.rs</span> <span class="tree-ext">rs</span>
+<span class="tree-line">│   ├──</span> <span class="tree-file">lib.rs</span> <span class="tree-ext">rs</span>
+<span class="tree-line">│   └──</span> <span class="tree-dir">pty/</span>
+<span class="tree-line">├──</span> <span class="tree-file">Cargo.toml</span> <span class="tree-ext">toml</span>
+<span class="tree-line">└──</span> <span class="tree-file">tauri.conf.json</span> <span class="tree-ext">json</span>
+<span class="tree-dir">src/</span>
+<span class="tree-line">├──</span> <span class="tree-file">index.html</span> <span class="tree-ext">html</span>
+<span class="tree-line">├──</span> <span class="tree-dir">terminal/</span>
+<span class="tree-line">│   ├──</span> <span class="tree-file">terminal.js</span> <span class="tree-ext">js</span>
+<span class="tree-line">│   ├──</span> <span class="tree-file">tab-manager.js</span> <span class="tree-ext">js</span>
+<span class="tree-line">│   └──</span> <span class="tree-file">ime-fix.js</span> <span class="tree-ext">js</span>
+<span class="tree-line">├──</span> <span class="tree-dir">sidebar/</span>
+<span class="tree-line">│   ├──</span> <span class="tree-file">agents.js</span> <span class="tree-ext">js</span>
+<span class="tree-line">│   └──</span> <span class="tree-file">file-tree.js</span> <span class="tree-ext">js</span>
+<span class="tree-line">└──</span> <span class="tree-file">main.js</span> <span class="tree-ext">js</span>
+<span class="tree-dir">static/</span>
+<span class="tree-line">├──</span> <span class="tree-file">xterm.min.js</span>
+<span class="tree-line">└──</span> <span class="tree-file">xterm.css</span>
+<span class="tree-file">CLAUDE.md</span> <span class="tree-ext">md</span>
+<span class="tree-file">README.md</span> <span class="tree-ext">md</span>
+    </div>`;
+  fileSection.querySelectorAll('.tree-file').forEach(el => {
+    el.onclick = () => openPreview(el.textContent.trim().split(' ')[0]);
+  });
+}
+
+// ═══ Preview ═══
+function renderPreview() {
+  previewBody.innerHTML = `<div class="md">
+<h1>OneCode Desktop</h1>
+<p>A native desktop client for managing multiple AI terminals. One window, many sessions.</p>
+<h2>Features</h2>
+<ul>
+<li><strong>Multi-Terminal Tabs</strong> — Create, switch, manage multiple Claude Code sessions</li>
+<li><strong>System Tray</strong> — Close window without losing terminals</li>
+<li><strong>Session Persistence</strong> — Restart app and recover your terminals</li>
+<li><strong>Agent @Mentions</strong> — Invoke specialized AI agents inline</li>
+</ul>
+<h2>Quick Start</h2>
+<pre><code>$ onecode-desktop
+✓ Connected to Claude Code
+✓ 3 terminals restored</code></pre>
+<blockquote><strong>OneCode Desktop</strong> is built on Tauri v2 + xterm.js, weighing under 10MB while supporting 10+ concurrent terminals.</blockquote>
+<h2>Keyboard Shortcuts</h2>
+<table>
+<tr><th>Shortcut</th><th>Action</th></tr>
+<tr><td><code>⌘T</code></td><td>New terminal</td></tr>
+<tr><td><code>⌘W</code></td><td>Close terminal</td></tr>
+<tr><td><code>⌘1-9</code></td><td>Switch terminal</td></tr>
+<tr><td><code>⌘B</code></td><td>Toggle sidebar</td></tr>
+</table>
+</div>`;
+}
+
+function openPreview(name) { previewTitle.textContent = name; previewPanel.classList.add('open'); state.previewOpen = true; }
+function closePreview() { previewPanel.classList.remove('open'); state.previewOpen = false; }
+
+// ═══ CC Popup ═══
+function showCcPopup(type) {
+  if (state.ccPopupOpen === type) { hideCcPopup(); return; }
+  const data = CC_STATUS; let html = '';
+  if (type==='skills') { html+=`<h3>Skills (${data.skills.length})</h3>`; data.skills.forEach(s=>{html+=`<div class="cc-item"><span class="cc-scope ${s.scope}">${s.scope==='project'?'P':'G'}</span><span class="cn">${s.name}</span><span class="cd">${s.description}</span></div>`;}); }
+  else if (type==='hooks') { const t=Object.values(data.hooks).reduce((s,v)=>s+v.length,0); html+=`<h3>Hooks (${t})</h3>`; for(const[ev,list] of Object.entries(data.hooks)) list.forEach(h=>{html+=`<div class="cc-item"><span class="cc-scope ${h.scope}">${h.scope==='project'?'P':'G'}</span><span class="cn">${ev}</span><span class="cd">${h.command}</span></div>`;}); }
+  else if (type==='plugins') { html+=`<h3>Plugins (${data.plugins.length})</h3>`; data.plugins.forEach(p=>{html+=`<div class="cc-item"><span class="cc-scope ${p.scope}">${p.scope==='project'?'P':'G'}</span><span class="cn">${p.name}</span><span class="cd">${p.type}</span></div>`;}); }
+  else if (type==='tasks') { html+=`<h3>Tasks (${data.tasks.length})</h3>`; data.tasks.forEach(t=>{html+=`<div class="cc-item"><span class="cc-scope ${t.scope}">${t.scope==='project'?'P':'G'}</span><span class="cn">${t.cron}</span><span class="cd">${t.name}</span></div>`;}); }
+  ccPopup.innerHTML = html; ccPopup.classList.add('visible'); state.ccPopupOpen = type;
+  const pill = document.querySelector(`.cc-pill[data-cc="${type}"]`);
+  if (pill) { const r = pill.getBoundingClientRect(); ccPopup.style.top = r.bottom+4+'px'; ccPopup.style.right = (window.innerWidth-r.right)+'px'; ccPopup.style.left = 'auto'; }
+}
+function hideCcPopup() { ccPopup.classList.remove('visible'); state.ccPopupOpen = null; }
+
+// ═══ Toast ═══
+function showToast(msg) { toastMsg.textContent = msg; toastEl.classList.add('visible'); setTimeout(()=>toastEl.classList.remove('visible'),2200); }
+
+// ═══ Status Bar ═══
+function updateStatusBar() {
+  const running = state.tabs.filter(t=>t.status==='running').length;
+  const exited = state.tabs.filter(t=>t.status==='exited').length;
+  const items = document.querySelectorAll('.statusbar-item');
+  if(items[0]) items[0].innerHTML = `<div class="statusbar-dot" style="background:var(--em);box-shadow:0 0 4px rgba(5,150,105,.3)"></div><span>${state.tabs.length} terminal${state.tabs.length!==1?'s':''}</span>`;
+  if(items[1]) items[1].innerHTML = `<span style="color:var(--em)">●</span><span>${running} running</span>`;
+  if(items[2]) items[2].innerHTML = exited>0 ? `<span style="color:var(--clay)">○</span><span>${exited} exited</span>` : '';
+}
+
+// ═══ Events ═══
+function bindEvents() {
+  // New tab button
+  const newBtn = document.createElement('div');
+  newBtn.className = 'tab-new';
+  newBtn.innerHTML = `<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><line x1="8" y1="3" x2="8" y2="13"/><line x1="3" y1="8" x2="13" y2="8"/></svg><span>New</span>`;
+  newBtn.onclick = addNewTab;
+  tabBar.appendChild(newBtn);
+
+  previewClose.onclick = closePreview;
+  sidebarCollapse.onclick = () => { state.sidebarOpen = !state.sidebarOpen; sidebar.classList.toggle('collapsed', !state.sidebarOpen); };
+
+  let agentsVisible = true;
+  agentHdr.onclick = () => { agentsVisible = !agentsVisible; agentList.style.display = agentsVisible ? '' : 'none'; };
+
+  document.querySelectorAll('.cc-pill').forEach(el => {
+    el.onclick = e => { e.stopPropagation(); showCcPopup(el.dataset.cc); };
+  });
+
+  document.addEventListener('click', e => {
+    if (state.ccPopupOpen && !e.target.closest('.cc-pill,.cc-popup')) hideCcPopup();
+    if (state.mentionVisible && !e.target.closest('.mention-pop,.agent-item')) hideMention();
+  });
+
+  document.addEventListener('keydown', e => {
+    if ((e.metaKey||e.ctrlKey) && e.key==='t') { e.preventDefault(); addNewTab(); }
+    if ((e.metaKey||e.ctrlKey) && e.key==='w') { e.preventDefault(); if(state.activeId) closeTab(state.activeId); }
+    if ((e.metaKey||e.ctrlKey) && e.key>='1' && e.key<='9') { e.preventDefault(); const i=parseInt(e.key)-1; if(state.tabs[i]) switchTab(state.tabs[i].id); }
+    if ((e.metaKey||e.ctrlKey) && e.key==='b') { e.preventDefault(); state.sidebarOpen=!state.sidebarOpen; sidebar.classList.toggle('collapsed',!state.sidebarOpen); }
+    if (e.key==='Escape') { if(state.previewOpen) closePreview(); if(state.mentionVisible) hideMention(); if(state.ccPopupOpen) hideCcPopup(); }
+    if (e.key==='@' && !e.metaKey && !e.ctrlKey) showMention('');
+  });
+
+  // Resize drag
+  let isDrag = false;
+  resizeH.onmousedown = e => { isDrag=true; resizeH.classList.add('dragging'); document.body.style.cursor='col-resize'; document.body.style.userSelect='none'; e.preventDefault(); };
+  document.addEventListener('mousemove', e => { if(!isDrag)return; const w=document.querySelector('.content').offsetWidth; const nw=Math.max(280,w-e.clientX-sidebar.offsetWidth); previewPanel.style.width=nw+'px'; previewPanel.style.minWidth=nw+'px'; previewPanel.style.transition='none'; });
+  document.addEventListener('mouseup', () => { if(!isDrag)return; isDrag=false; resizeH.classList.remove('dragging'); document.body.style.cursor=''; document.body.style.userSelect=''; previewPanel.style.transition=''; });
+}
+
+init();
+</script>
+</body>
+</html>
