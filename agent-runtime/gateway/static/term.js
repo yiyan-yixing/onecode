@@ -670,6 +670,31 @@
   var CTRL_REPLAY_END = 0x03;
   var CTRL_PTY_RESIZE = 0x04;
 
+  // ── Render batching ──
+  // Merge multiple PTY data frames into a single term.write() per paint cycle.
+  // Reduces xterm.js re-render frequency from N/frame to 1/frame.
+  var _writeQueue = [];
+  var _writeRaf = 0;
+  var _writeQueueBytes = 0;
+  var LARGE_FRAME_THRESHOLD = 32 * 1024; // 32KB — fast path, skip RAF merge
+
+  function flushWriteQueue() {
+    _writeRaf = 0;
+    if (_writeQueue.length === 0) {
+      return;
+    }
+    // Merge all queued slices into one Uint8Array for a single term.write()
+    var merged = new Uint8Array(_writeQueueBytes);
+    var offset = 0;
+    for (var i = 0; i < _writeQueue.length; i++) {
+      merged.set(_writeQueue[i], offset);
+      offset += _writeQueue[i].length;
+    }
+    _writeQueue = [];
+    _writeQueueBytes = 0;
+    term.write(merged);
+  }
+
   var _reconnectTimer = null;
   var _isConnecting = false;
 
@@ -760,7 +785,22 @@
           doFullClear();
           pendingReset = false;
         }
-        term.write(bytes.slice(1));
+        var payload = bytes.slice(1);
+        // Large frame fast path: write immediately (user is cat-ing a big file)
+        if (payload.length > LARGE_FRAME_THRESHOLD) {
+          // Flush any pending small frames first
+          if (_writeQueue.length > 0) {
+            flushWriteQueue();
+          }
+          term.write(payload);
+          return;
+        }
+        // Batch small frames into next RAF for merged write
+        _writeQueue.push(payload);
+        _writeQueueBytes += payload.length;
+        if (!_writeRaf) {
+          _writeRaf = requestAnimationFrame(flushWriteQueue);
+        }
       }
     };
 
@@ -768,6 +808,13 @@
       _isConnecting = false;
       ws = null;
       window.termWs = null;
+      // Flush any pending writes before disconnect
+      if (_writeRaf) {
+        cancelAnimationFrame(_writeRaf);
+        _writeRaf = 0;
+      }
+      _writeQueue = [];
+      _writeQueueBytes = 0;
       // Do not reconnect on clean shutdown (1000), server shutdown (1001), or auth failure (1008)
       if (event.code === 1000 || event.code === 1001 || event.code === 1008) {
         return;

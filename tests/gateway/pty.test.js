@@ -47,13 +47,20 @@ module.exports = function (t) {
     t.ok(src.includes('removeClient'), 'source defines removeClient');
     t.ok(src.includes('MAX_BUFFER_SIZE'), 'source defines MAX_BUFFER_SIZE');
     t.ok(src.includes('MAX_BUFFERED_AMOUNT'), 'source defines MAX_BUFFERED_AMOUNT');
+    t.ok(src.includes('FLUSH_INTERVAL_MS'), 'source defines FLUSH_INTERVAL_MS for batch flush');
+    t.ok(src.includes('FLUSH_IMMEDIATE_BYTES'), 'source defines FLUSH_IMMEDIATE_BYTES for large output');
+    t.ok(src.includes('FLATTEN_CHUNK_THRESHOLD'), 'source defines FLATTEN_CHUNK_THRESHOLD for lazy trim');
+    t.ok(src.includes('_trimOffset'), 'source defines _trimOffset for lazy ring buffer trimming');
+    t.ok(src.includes('_pendingBytes'), 'source defines _pendingBytes for flush threshold tracking');
+    t.ok(src.includes('_doFlush'), 'source defines _doFlush for dual-trigger flush');
+    t.ok(src.includes('_lazyTrim'), 'source defines _lazyTrim for efficient buffer trimming');
+    t.ok(src.includes('LARGE_FRAME_THRESHOLD') || src.includes('_writeQueue'), 'frontend uses render batching');
     t.ok(src.includes('DEFAULT_COLS'), 'source defines DEFAULT_COLS = 200');
     t.ok(src.includes('DEFAULT_ROWS'), 'source defines DEFAULT_ROWS = 50');
     t.ok(src.includes('findUtf8Boundary'), 'source defines findUtf8Boundary for UTF-8 safety');
     t.ok(src.includes('getReplayBuffer'), 'source defines getReplayBuffer');
     t.ok(src.includes('recalcSize'), 'source defines recalcSize');
-    t.ok(src.includes('_flattenAndTrim'), 'source defines _flattenAndTrim for buffer management');
-    t.ok(src.includes('setImmediate'), 'source uses setImmediate for batch flush');
+    t.ok(src.includes('setImmediate') || src.includes('FLUSH_INTERVAL_MS'), 'source uses batched flush (setImmediate or FLUSH_INTERVAL_MS)');
     t.ok(src.includes('MAX_WS_CLIENTS') || src.includes('clients.size'), 'source tracks client connections');
     return;
   }

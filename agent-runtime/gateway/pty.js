@@ -6,7 +6,10 @@ const { EventEmitter } = require('events');
 const DEFAULT_COLS = 200;
 const DEFAULT_ROWS = 50;
 const MAX_BUFFER_SIZE = 10 * 1024 * 1024; // 10MB ring buffer
-const MAX_BUFFERED_AMOUNT = 1024 * 1024; // 1MB — kick slow clients beyond this
+const MAX_BUFFERED_AMOUNT = 256 * 1024;  // 256KB — kick slow clients beyond this
+const FLUSH_INTERVAL_MS = 50;             // 50ms batch flush (~20fps, aligned with Desktop)
+const FLUSH_IMMEDIATE_BYTES = 128 * 1024; // 128KB — flush immediately on large output
+const FLATTEN_CHUNK_THRESHOLD = 200;      // Only flatten when chunk count exceeds this
 
 // Find the next valid UTF-8 leading byte position from offset.
 function findUtf8Boundary(buf, offset) {
@@ -53,6 +56,7 @@ class PtyManager extends EventEmitter {
     this.clients = new Set();
     this._chunks = [];
     this._bufferLength = 0;
+    this._trimOffset = 0;       // Logical start offset — skip leading bytes instead of concat
     this.cols = DEFAULT_COLS;
     this.rows = DEFAULT_ROWS;
     this._cmd = null;
@@ -62,8 +66,11 @@ class PtyManager extends EventEmitter {
     this._restartCount = 0;
     this._replayDirty = true;
     this._cachedReplay = null;
+    // Dual-trigger flush: 50ms timer + 128KB immediate threshold
     this._sendPending = false;
     this._pendingChunks = [];
+    this._pendingBytes = 0;
+    this._flushTimer = null;
     this._restarting = false;
   }
 
@@ -92,6 +99,12 @@ class PtyManager extends EventEmitter {
     this.ptyProcess = p;
     this._chunks = [];
     this._bufferLength = 0;
+    this._trimOffset = 0;
+    this._pendingChunks = [];
+    this._pendingBytes = 0;
+    this._sendPending = false;
+    clearTimeout(this._flushTimer);
+    this._flushTimer = null;
     this._replayDirty = true;
 
     p.onData((data) => {
@@ -107,21 +120,28 @@ class PtyManager extends EventEmitter {
       if (self.clients.size === 0 && self._bufferLength > MAX_BUFFER_SIZE / 10) {
         self._chunks = [];
         self._bufferLength = 0;
+        self._trimOffset = 0;
         self._replayDirty = true;
       }
-      // Trim buffer if it exceeds threshold (1.1x to avoid re-trimming on every small chunk)
-      if (self._bufferLength > MAX_BUFFER_SIZE * 1.1) {
-        self._flattenAndTrim();
+      // Lazy trim: only when chunks array is large AND exceeds threshold
+      if (self._chunks.length > FLATTEN_CHUNK_THRESHOLD && self._bufferLength > MAX_BUFFER_SIZE * 1.1) {
+        self._lazyTrim();
       }
-      // Batch small chunks via setImmediate to reduce GC pressure from per-chunk
-      // Buffer.alloc + copy. Instead of one frame per onData, we merge all pending
-      // chunks into a single frame per event-loop iteration.
+      // Dual-trigger flush: push to pending queue + track byte count
       self._pendingChunks.push(buf);
-      if (!self._sendPending) {
+      self._pendingBytes += buf.length;
+      if (self._pendingBytes >= FLUSH_IMMEDIATE_BYTES) {
+        // Large output — flush immediately (avoid backlog)
+        clearTimeout(self._flushTimer);
+        self._flushTimer = null;
+        self._doFlush(p);
+      } else if (!self._sendPending) {
+        // Start 50ms timer for batch flush
         self._sendPending = true;
-        setImmediate(function () {
-          self._flushPending(p);
-        });
+        self._flushTimer = setTimeout(function () {
+          self._flushTimer = null;
+          self._doFlush(p);
+        }, FLUSH_INTERVAL_MS);
       }
     });
 
@@ -164,19 +184,19 @@ class PtyManager extends EventEmitter {
     });
   }
 
-  // Flush pending PTY chunks as a single batched frame (called via setImmediate)
-  _flushPending(stalePty) {
+  // Flush pending PTY chunks (called by timer or immediate threshold)
+  _doFlush(stalePty) {
     this._sendPending = false;
     if (this.ptyProcess !== stalePty) {
       return;
     }
     var chunks = this._pendingChunks;
     this._pendingChunks = [];
+    this._pendingBytes = 0;
     if (chunks.length === 0 || this.clients.size === 0) {
       return;
     }
     // Build one merged frame: [FRAME_PTY][chunk1][chunk2]...
-    // Much cheaper than N separate Buffer.alloc + copy per chunk
     var totalLen = 0;
     for (var i = 0; i < chunks.length; i++) {
       totalLen += chunks[i].length;
@@ -187,6 +207,10 @@ class PtyManager extends EventEmitter {
     for (var j = 0; j < chunks.length; j++) {
       chunks[j].copy(frame, offset);
       offset += chunks[j].length;
+    }
+    // Log large frames for diagnostics
+    if (totalLen > 64 * 1024) {
+      console.warn('[pty] large flush: %d KB (%d chunks)', (totalLen / 1024) | 0, chunks.length);
     }
     var toTerminate = [];
     for (var ws of this.clients) {
@@ -208,52 +232,54 @@ class PtyManager extends EventEmitter {
     }
   }
 
-  // Flatten chunks into a single buffer and trim to MAX_BUFFER_SIZE
-  // Memory-conscious: avoids creating a full copy when only the tail is needed
-  _flattenAndTrim() {
+  // Lazy trim: update logical offset instead of Buffer.concat
+  // Only flatten when chunks array is large (saves GC from frequent full copies)
+  _lazyTrim() {
     if (this._chunks.length === 0) {
       return;
     }
-    // Fast path: already a single chunk under the limit
-    if (this._chunks.length === 1 && this._chunks[0].length <= MAX_BUFFER_SIZE) {
-      this._bufferLength = this._chunks[0].length;
-      this._replayDirty = true;
+    var overBy = this._bufferLength - MAX_BUFFER_SIZE;
+    if (overBy <= 0) {
       return;
     }
-    // Calculate total size first to decide the trimming strategy
-    var totalLen = 0;
-    for (var i = 0; i < this._chunks.length; i++) {
-      totalLen += this._chunks[i].length;
-    }
-    if (totalLen <= MAX_BUFFER_SIZE) {
-      // Just flatten, no trimming needed
-      var flat = Buffer.concat(this._chunks, totalLen);
-      this._chunks = [flat];
-      this._bufferLength = totalLen;
-      this._replayDirty = true;
-      return;
-    }
-    // Need to trim: skip leading chunks that are entirely before the cut point
-    var cutAt = totalLen - MAX_BUFFER_SIZE;
-    var skipLen = 0;
+    // Skip leading chunks that are entirely before the trim point
+    var skipLen = this._trimOffset;
     var startIdx = 0;
-    for (var j = 0; j < this._chunks.length; j++) {
-      if (skipLen + this._chunks[j].length > cutAt) {
+    for (var i = 0; i < this._chunks.length; i++) {
+      if (skipLen + this._chunks[i].length > this._trimOffset + overBy) {
         break;
       }
-      skipLen += this._chunks[j].length;
-      startIdx = j + 1;
+      skipLen += this._chunks[i].length;
+      startIdx = i + 1;
     }
-    // Concat only the tail chunks (from the one containing the cut point onward)
-    var tailChunks = this._chunks.slice(startIdx);
-    var tailBuf = Buffer.concat(tailChunks, totalLen - skipLen);
-    // Trim from the cut point within the first tail chunk
-    var localCut = cutAt - skipLen;
-    var safeAt = findUtf8Boundary(tailBuf, localCut);
-    var trimmed = tailBuf.slice(safeAt);
-    this._chunks = [trimmed];
-    this._bufferLength = trimmed.length;
+    if (startIdx > 0) {
+      this._chunks = this._chunks.slice(startIdx);
+      this._trimOffset = 0;
+      this._bufferLength = 0;
+      for (var j = 0; j < this._chunks.length; j++) {
+        this._bufferLength += this._chunks[j].length;
+      }
+    }
+    // If still over limit, trim within the first chunk
+    if (this._bufferLength > MAX_BUFFER_SIZE && this._chunks.length > 0) {
+      var excess = this._bufferLength - MAX_BUFFER_SIZE;
+      var localCut = this._trimOffset + excess;
+      var safeAt = findUtf8Boundary(this._chunks[0], localCut);
+      this._chunks[0] = this._chunks[0].slice(safeAt);
+      this._trimOffset = 0;
+      this._bufferLength = 0;
+      for (var k = 0; k < this._chunks.length; k++) {
+        this._bufferLength += this._chunks[k].length;
+      }
+    }
     this._replayDirty = true;
+    // If chunks array is still very large after trim, flatten once
+    if (this._chunks.length > FLATTEN_CHUNK_THRESHOLD * 2) {
+      var flat = Buffer.concat(this._chunks, this._bufferLength);
+      this._chunks = [flat];
+      this._trimOffset = 0;
+      this._bufferLength = flat.length;
+    }
   }
 
   // Get the full replay buffer with FRAME_PTY prefix (cached)
@@ -261,7 +287,7 @@ class PtyManager extends EventEmitter {
     if (!this._replayDirty && this._cachedReplay) {
       return this._cachedReplay;
     }
-    var flat = this._chunks.length === 1 ? this._chunks[0] : Buffer.concat(this._chunks);
+    var flat = this._getEffectiveBuffer();
     var frame = Buffer.alloc(1 + flat.length);
     frame[0] = FRAME_PTY;
     flat.copy(frame, 1);
@@ -272,13 +298,46 @@ class PtyManager extends EventEmitter {
 
   // Backward-compatible buffer accessor (for term-ws.js replay case)
   get buffer() {
+    return this._getEffectiveBuffer();
+  }
+
+  // Build the effective buffer respecting _trimOffset (avoids full concat on every read)
+  _getEffectiveBuffer() {
     if (this._chunks.length === 0) {
       return Buffer.alloc(0);
     }
-    if (this._chunks.length === 1) {
-      return this._chunks[0];
+    if (this._trimOffset === 0) {
+      if (this._chunks.length === 1) {
+        return this._chunks[0];
+      }
+      return Buffer.concat(this._chunks);
     }
-    return Buffer.concat(this._chunks);
+    // Skip trimmed bytes from leading chunks
+    var remaining = this._trimOffset;
+    var startIdx = 0;
+    for (var i = 0; i < this._chunks.length; i++) {
+      if (remaining < this._chunks[i].length) {
+        break;
+      }
+      remaining -= this._chunks[i].length;
+      startIdx = i + 1;
+    }
+    if (startIdx >= this._chunks.length) {
+      return Buffer.alloc(0);
+    }
+    // Slice the first kept chunk
+    var tailChunks = this._chunks.slice(startIdx);
+    if (remaining > 0 && tailChunks.length > 0) {
+      tailChunks[0] = tailChunks[0].slice(remaining);
+    }
+    if (tailChunks.length === 1) {
+      return tailChunks[0];
+    }
+    var totalLen = 0;
+    for (var j = 0; j < tailChunks.length; j++) {
+      totalLen += tailChunks[j].length;
+    }
+    return Buffer.concat(tailChunks, totalLen);
   }
 
   resizeTo(cols, rows) {
@@ -374,10 +433,14 @@ class PtyManager extends EventEmitter {
     }
     this._chunks = [];
     this._bufferLength = 0;
+    this._trimOffset = 0;
     this._cachedReplay = null;
     this._replayDirty = true;
     this._pendingChunks = [];
+    this._pendingBytes = 0;
     this._sendPending = false;
+    clearTimeout(this._flushTimer);
+    this._flushTimer = null;
     this._restartCount = 0;
     var frame = encodeCtrl(CTRL_RESET);
     for (var ws of this.clients) {
