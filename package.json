@@ -1,0 +1,22 @@
+{
+  "name": "onecode",
+  "version": "0.5.0",
+  "description": "OneCode — AI Agent Terminal，以 Claude Code 为内核的容器化开发环境",
+  "private": true,
+  "scripts": {
+    "dev": "node agent-runtime/gateway/index.js",
+    "test": "node tests/run.js",
+    "test:gateway": "node tests/run.js gateway",
+    "test:cli": "node tests/run.js cli",
+    "build": "echo \"No build step needed — gateway runs directly\" && exit 0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/yiyan-yixing/onecode.git"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "node-pty": "^1.0.0",
+    "ws": "^8.18.0"
+  }
+}

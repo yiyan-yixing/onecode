@@ -1,0 +1,15 @@
+{
+  "autoCompactEnabled": true,
+  "env": {
+    "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "200000",
+    "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE": "80"
+  },
+  "skipDangerousModePermissionPrompt": true,
+  "statusLine": {
+    "type": "command",
+    "command": "/bin/bash /home/work/.claude/command/statusline-command.sh"
+  },
+  "theme": {
+    "fontSize": 13
+  }
+}

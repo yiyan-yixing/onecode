@@ -1,0 +1,24 @@
+# Binaries
+coder/*.tar.gz
+extensions/*.vsix
+
+# Local overrides
+settings.local.json
+
+# Git
+.git
+.gitignore
+
+# CI
+.github
+
+# Claude Code project config
+.claude
+
+# Node (dependencies installed inside image, not from context)
+**/node_modules
+
+# Dev files
+*.md
+!VERSION
+.editorconfig

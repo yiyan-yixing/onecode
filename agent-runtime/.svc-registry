@@ -1,0 +1,6 @@
+# Service Registry
+# Format: name	port
+# Access via: /svc/<name> → 127.0.0.1:<port>
+file-server-node	3000
+file-server-python	4000
+redis	6379

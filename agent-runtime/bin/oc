@@ -1,0 +1,1754 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+IMAGE_REPO="ghcr.io/yiyan-yixing/onecode"
+LOCAL_IMAGE="onecode"       # local image name (e.g. onecode:0.5.0)
+IMAGE="${AGENT_RUNTIME_IMAGE:-${IMAGE_REPO}:latest}"
+IMAGE_TAG=""
+OC_VERSION="0.4.0"
+REPO_OWNER="yiyan-yixing"
+REPO_NAME="onecode"
+REPO_BRANCH="main"
+
+# ── Colors & Output ────────────────────────────────────────────────
+if [ -t 1 ]; then
+    RED=$'\033[0;31m'
+    GREEN=$'\033[0;32m'
+    YELLOW=$'\033[0;33m'
+    CYAN=$'\033[0;36m'
+    DIM=$'\033[2m'
+    BOLD=$'\033[1m'
+    NC=$'\033[0m'
+else
+    RED='' GREEN='' YELLOW='' CYAN='' DIM='' BOLD='' NC=''
+fi
+
+# ── Clack-style output (Vercel/Astro/SvelteKit CLI style) ──────────
+# Symbols: ◇ (step start)  │ (active)  └ (done)  ✓ ✗ ⚠
+clack_step()  { echo "  ${CYAN}◇${NC}  $*"; }
+clack_line()  { echo "  ${CYAN}│${NC}  $*"; }
+clack_ok()    { echo "  ${CYAN}└${NC}  ${GREEN}✓${NC} $*"; }
+clack_err()   { echo "  ${CYAN}└${NC}  ${RED}✗${NC} $*" >&2; }
+clack_warn()  { echo "  ${CYAN}└${NC}  ${YELLOW}⚠${NC} $*"; }
+clack_dim()   { echo "  ${CYAN}│${NC}  ${DIM}$*${NC}"; }
+
+# ── Spinner (braille animation with elapsed timer) ────────────────
+_SPINNER_PID=""
+_SPINNER_START=0
+spinner_start() {
+    _SPINNER_MSG="$1"
+    _SPINNER_START=$(date +%s)
+    local frames="⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+    local i=0
+    while true; do
+        local frame="${frames:$((i % 10)):1}"
+        local now
+        now=$(date +%s)
+        local elapsed=$((now - _SPINNER_START))
+        local timer=""
+        [ "$elapsed" -gt 0 ] && timer=" ${DIM}(${elapsed}s)${NC}"
+        printf "\r  ${CYAN}│${NC}  ${YELLOW}${frame}${NC} ${_SPINNER_MSG}${timer}  " >&2
+        i=$((i + 1))
+        sleep 0.12
+    done &
+    _SPINNER_PID=$!
+}
+spinner_stop() {
+    [ -n "$_SPINNER_PID" ] && kill "$_SPINNER_PID" 2>/dev/null || true
+    # Clear the spinner line
+    printf "\r%*s\r" 80 "" >&2
+    _SPINNER_PID=""
+    _SPINNER_START=0
+}
+# Ensure spinner is cleaned up on exit (even on error)
+trap 'spinner_stop' EXIT
+
+# Return elapsed seconds since spinner_start was called
+spinner_elapsed() {
+    [ "$_SPINNER_START" -gt 0 ] || { echo "0"; return; }
+    local now
+    now=$(date +%s)
+    echo "$((now - _SPINNER_START))"
+}
+
+# Poll until a command succeeds or timeout (seconds)
+# Returns 0 on success, 1 on timeout
+spin_until_cmd() {
+    local msg="$1" cmd="$2" timeout="${3:-60}"
+    local elapsed=0
+    local interval=2
+    spinner_start "$msg"
+    while [ "$elapsed" -lt "$timeout" ]; do
+        if eval "$cmd" &>/dev/null; then
+            local s
+            s=$(spinner_elapsed)
+            spinner_stop
+            echo "$s"
+            return 0
+        fi
+        sleep "$interval"
+        elapsed=$((elapsed + interval))
+    done
+    spinner_stop
+    return 1
+}
+
+# ── GitHub fetch helper ────────────────────────────────────────────
+# Robust download: mirror → GitHub API → direct raw → insecure fallback
+# GitHub API is preferred over raw.* because it uses a different CDN
+# and is not affected by raw.githubusercontent.com DNS pollution.
+github_fetch() {
+    local path="$1"
+    local api_url="https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/contents/${path}?ref=${REPO_BRANCH}"
+    local raw_url="https://raw.githubusercontent.com/${REPO_OWNER}/${REPO_NAME}/${REPO_BRANCH}/${path}"
+    local mirror_url=""
+
+    # Build mirror URL if gh_mirror is configured
+    if [ -n "${gh_mirror:-}" ]; then
+        mirror_url="${gh_mirror}/${raw_url}"
+    fi
+
+    # Priority 1: Mirror (if configured)
+    if [ -n "$mirror_url" ]; then
+        if curl -fsSL --http1.1 "$mirror_url" 2>/dev/null; then
+            return 0
+        fi
+    fi
+
+    # Priority 2: GitHub API (most reliable — different CDN from raw.*)
+    if [ -n "${GITHUB_TOKEN:-}" ]; then
+        if curl -fsSL --http1.1 \
+            -H "Authorization: token ${GITHUB_TOKEN}" \
+            -H "Accept: application/vnd.github.v3.raw" \
+            "$api_url" 2>/dev/null; then
+            return 0
+        fi
+    fi
+    if curl -fsSL --http1.1 -H "Accept: application/vnd.github.v3.raw" "$api_url" 2>/dev/null; then
+        return 0
+    fi
+
+    # Priority 3: Direct raw.githubusercontent.com
+    if curl -fsSL --http1.1 "$raw_url" 2>/dev/null; then
+        return 0
+    fi
+
+    # Priority 4: Insecure fallback
+    if [ -n "$mirror_url" ]; then
+        curl -fsSLk --http1.1 "$mirror_url" 2>/dev/null && return 0
+    fi
+    curl -fsSLk --http1.1 "$raw_url" 2>/dev/null && return 0
+    curl -fsSLk -H "Accept: application/vnd.github.v3.raw" "$api_url" 2>/dev/null && return 0
+
+    echo "Error: Failed to download ${path}" >&2
+    echo "  Try: oc config set gh_mirror=https://gh-proxy.com" >&2
+    return 1
+}
+
+# ── Config ────────────────────────────────────────────────────────
+OC_HOME="${OC_HOME:-$HOME/.onecode}"
+OC_CONFIG="$OC_HOME/settings.json"
+
+# ── jq dependency check ──────────────────────────────────────────
+require_jq() {
+    if ! command -v jq &>/dev/null; then
+        echo "Error: jq is required but not installed." >&2
+        echo "  Install: brew install jq  (macOS)" >&2
+        echo "           apt install jq   (Ubuntu/Debian)" >&2
+        exit 1
+    fi
+}
+
+# ── Provider defaults (single source of truth) ───────────────────
+PROVIDER_DEFAULTS_anthropic_api_base_url="https://api.anthropic.com"
+PROVIDER_DEFAULTS_anthropic_model="claude-sonnet-4-6"
+PROVIDER_DEFAULTS_openai_compatible_api_base_url=""
+PROVIDER_DEFAULTS_openai_compatible_model="gpt-4o"
+
+cfg_default() {
+    local provider="${1:-anthropic}" key="$2"
+    local var="PROVIDER_DEFAULTS_${provider}_${key}"
+    if [ -n "${!var:-}" ]; then
+        echo "${!var}"
+    else
+        var="PROVIDER_DEFAULTS_anthropic_${key}"
+        echo "${!var:-}"
+    fi
+}
+
+# ── v1 → v2 migration ────────────────────────────────────────────
+cfg_migrate_v1_to_v2() {
+    [ -f "$OC_CONFIG" ] || return 0
+    # Already v2+?
+    local ver
+    ver=$(jq -r '.["$version"] // 0' "$OC_CONFIG" 2>/dev/null) || return 0
+    [ "$ver" -ge 2 ] 2>/dev/null && return 0
+
+    # Read v1 fields (uppercase keys)
+    local old_key old_url old_model
+    old_key=$(jq -r '.API_KEY // empty' "$OC_CONFIG" 2>/dev/null) || old_key=""
+    old_url=$(jq -r '.API_BASE_URL // empty' "$OC_CONFIG" 2>/dev/null) || old_url=""
+    old_model=$(jq -r '.MODEL // empty' "$OC_CONFIG" 2>/dev/null) || old_model=""
+
+    # Infer provider from URL
+    local inferred="anthropic"
+    case "$old_url" in
+        https://api.anthropic.com*|'') inferred="anthropic" ;;
+        *) inferred="openai_compatible" ;;
+    esac
+
+    # Write v2 format
+    local tmp="${OC_CONFIG}.tmp.$$"
+    jq -n \
+      --arg v "2" \
+      --arg p "$inferred" \
+      --arg ak "${old_key:-}" \
+      --arg au "${old_url:-}" \
+      --arg m "${old_model:-}" \
+    '{"$version":$v,"provider":$p,"api_key":$ak,"api_base_url":$au,"model":$m}' \
+    > "$tmp" && mv "$tmp" "$OC_CONFIG" && chmod 600 "$OC_CONFIG"
+
+    echo "Config migrated to v2 (provider: $inferred)"
+}
+
+# ── JSON I/O with jq ─────────────────────────────────────────────
+cfg_get() {
+    local key="$1"
+    [ -f "$OC_CONFIG" ] || return 1
+    jq -r --arg k "$key" '.[$k] // empty' "$OC_CONFIG" 2>/dev/null
+}
+
+cfg_set() {
+    local key="$1" val="$2"
+    local tmp="${OC_CONFIG}.tmp.$$"
+    require_jq
+    [ -f "$OC_CONFIG" ] || { mkdir -p "$OC_HOME"; echo '{}' > "$OC_CONFIG"; chmod 600 "$OC_CONFIG"; }
+    # Validate before writing
+    local err
+    err=$(cfg_validate_key "$key" "$val" 2>&1) || { echo "$err" >&2; return 1; }
+    # Determine how to pass the value to jq
+    # - true/false/integer → --argjson (JSON literal)
+    # - everything else → --arg (safe string, jq handles quoting)
+    if [ "$val" = "true" ] || [ "$val" = "false" ]; then
+        jq --arg k "$key" --argjson v "$val" '.[$k] = $v' "$OC_CONFIG" > "$tmp" 2>/dev/null
+    elif [[ "$val" =~ ^[0-9]+$ ]] && [ ${#val} -lt 10 ]; then
+        jq --arg k "$key" --argjson v "$val" '.[$k] = $v' "$OC_CONFIG" > "$tmp" 2>/dev/null
+    else
+        jq --arg k "$key" --arg v "$val" '.[$k] = $v' "$OC_CONFIG" > "$tmp" 2>/dev/null
+    fi
+    if [ -s "$tmp" ]; then
+        mv "$tmp" "$OC_CONFIG" && chmod 600 "$OC_CONFIG"
+    else
+        rm -f "$tmp"
+        echo "Error: failed to update $key in $OC_CONFIG" >&2
+        return 1
+    fi
+}
+
+cfg_del() {
+    local key="$1"
+    [ -f "$OC_CONFIG" ] || return 0
+    local tmp="${OC_CONFIG}.tmp.$$"
+    jq --arg k "$key" 'del(.[$k])' "$OC_CONFIG" > "$tmp" 2>/dev/null \
+      && mv "$tmp" "$OC_CONFIG" && chmod 600 "$OC_CONFIG"
+}
+
+cfg_load() {
+    [ -f "$OC_CONFIG" ] || return 0
+    require_jq
+    # Auto-migrate v1 → v2
+    cfg_migrate_v1_to_v2
+    # Load all keys (skip $version metadata) into shell variables
+    eval "$(jq -r '
+        to_entries |
+        map(select(.key | startswith("$") | not)) |
+        map("\(.key)=\(.value | @sh)") |
+        .[]
+    ' "$OC_CONFIG" 2>/dev/null)" || true
+}
+
+cfg_save_all() {
+    require_jq
+    mkdir -p "$OC_HOME"
+    local tmp="${OC_CONFIG}.tmp.$$"
+    jq -n \
+      --arg v "2" \
+      --arg provider "${provider:-anthropic}" \
+      --arg api_key "${api_key:-}" \
+      --arg api_base_url "${api_base_url:-}" \
+      --arg model "${model:-}" \
+      --arg backend "${backend:-claude-code}" \
+      --arg docker_platform "${docker_platform:-linux/amd64}" \
+      --arg image_tag "${image_tag:-latest}" \
+      --arg gh_mirror "${gh_mirror:-https://gh-proxy.com}" \
+      --argjson gateway_port "${gateway_port:-7681}" \
+      --argjson app_port "${app_port:-8000}" \
+      --argjson ssh_port "${ssh_port:-8222}" \
+      --arg term_token "${term_token:-}" \
+      --argjson gateway_https "${gateway_https:-false}" \
+    '{"$version":$v,"provider":$provider,"api_key":$api_key,"api_base_url":$api_base_url,"model":$model,"backend":$backend,"docker_platform":$docker_platform,"image_tag":$image_tag,"gh_mirror":$gh_mirror,"gateway_port":$gateway_port,"app_port":$app_port,"ssh_port":$ssh_port,"term_token":$term_token,"gateway_https":$gateway_https}' \
+    > "$tmp" && mv "$tmp" "$OC_CONFIG" && chmod 600 "$OC_CONFIG"
+}
+
+# ── Key alias: v1 uppercase → v2 lowercase ───────────────────────
+cfg_normalize_key() {
+    case "$1" in
+        API_KEY)      echo "api_key" ;;
+        API_BASE_URL) echo "api_base_url" ;;
+        MODEL)        echo "model" ;;
+        *)            echo "$1" ;;
+    esac
+}
+
+# ── Config validation ─────────────────────────────────────────────
+is_placeholder_key() {
+    case "${1:-}" in
+        ""|sk-test-key|sk-placeholder|sk-your-api-key|sk-xxx|sk-replace-me) return 0 ;;
+    esac
+    return 1
+}
+
+cfg_validate_key() {
+    local key="$1" val="$2"
+    case "$key" in
+        api_key)
+            if [ -z "$val" ]; then
+                echo "error: api_key cannot be empty"
+                return 1
+            fi
+            if is_placeholder_key "$val"; then
+                echo "error: api_key appears to be a placeholder ($val)"
+                return 1
+            fi
+            ;;
+        api_base_url)
+            if [ -n "$val" ] && ! [[ "$val" =~ ^https?://.+ ]]; then
+                echo "error: api_base_url must be a valid URL (http:// or https://)"
+                return 1
+            fi
+            ;;
+        backend)
+            if [ "$val" != "claude-code" ] && [ "$val" != "opencode" ]; then
+                echo "error: backend must be claude-code or opencode"
+                return 1
+            fi
+            ;;
+        docker_platform)
+            if [ -n "$val" ] && [ "$val" != "linux/amd64" ] && [ "$val" != "linux/arm64" ]; then
+                echo "error: docker_platform must be linux/amd64 or linux/arm64"
+                return 1
+            fi
+            ;;
+        gateway_port|app_port|ssh_port)
+            if [ -n "$val" ]; then
+                if ! [[ "$val" =~ ^[0-9]+$ ]] || [ "$val" -lt 1 ] || [ "$val" -gt 65535 ]; then
+                    echo "error: $key must be between 1 and 65535"
+                    return 1
+                fi
+            fi
+            ;;
+        gateway_https)
+            if [ "$val" != "true" ] && [ "$val" != "false" ]; then
+                echo "error: gateway_https must be true or false"
+                return 1
+            fi
+            ;;
+    esac
+    return 0
+}
+
+# ── Load config + env var overrides ──────────────────────────────
+# Snapshot env vars BEFORE loading from file (env > file > default)
+_env_api_key="${API_KEY:-}"
+_env_base_url="${API_BASE_URL:-}"
+_env_model="${MODEL:-}"
+_env_platform="${AGENT_RUNTIME_PLATFORM:-}"
+
+cfg_load
+
+# Env var overrides (v1 uppercase names for backward compat)
+[ -n "$_env_api_key" ]   && api_key="$_env_api_key"      || true
+[ -n "$_env_base_url" ]  && api_base_url="$_env_base_url" || true
+[ -n "$_env_model" ]     && model="$_env_model"           || true
+[ -n "$_env_platform" ]  && docker_platform="$_env_platform" || true
+
+# Fill in provider defaults for missing fields
+[ -z "${api_base_url:-}" ] && api_base_url="$(cfg_default "${provider:-anthropic}" api_base_url)" || true
+[ -z "${model:-}" ]        && model="$(cfg_default "${provider:-anthropic}" model)" || true
+
+resolve_config() {
+    # Fill in provider defaults for missing fields
+    [ -z "${api_base_url:-}" ] && api_base_url="$(cfg_default "${provider:-anthropic}" api_base_url)" || true
+    [ -z "${model:-}" ]        && model="$(cfg_default "${provider:-anthropic}" model)" || true
+
+    # First run or placeholder key: full interactive wizard
+    if [ -z "${api_key:-}" ] || is_placeholder_key "${api_key:-}"; then
+        cat <<'WELCOME'
+
+  ╔═══════════════════════════════════════════════╗
+  ║          Welcome to OneCode! 🚀               ║
+  ║                                               ║
+  ║  Let's configure your LLM API connection.     ║
+  ║  Settings will be saved to ~/.onecode/        ║
+  ╚═══════════════════════════════════════════════╝
+
+WELCOME
+        if is_placeholder_key "${api_key:-}"; then
+            echo "⚠  Current API key appears to be a placeholder. Please enter a real key."
+            echo ""
+        fi
+
+        # Step 1: Provider selection
+        local chosen_provider="${provider:-}"
+        if [ -z "$chosen_provider" ]; then
+            echo "  Step 1: Choose your API provider"
+            echo ""
+            echo "    1) Anthropic         (Claude models)"
+            echo "    2) OpenAI Compatible (any OpenAI-format API)"
+            echo "    3) Custom            (enter your own provider name)"
+            echo ""
+            read -rp "  Select [1-3]: " provider_choice
+            case "$provider_choice" in
+                2) chosen_provider="openai_compatible" ;;
+                3) read -rp "  Provider name: " chosen_provider ;;
+                *) chosen_provider="anthropic" ;;
+            esac
+            echo ""
+        fi
+        provider="$chosen_provider"
+
+        # Step 2: API Base URL
+        echo "  Step 2: API Base URL"
+        local default_url
+        default_url="$(cfg_default "$provider" api_base_url)"
+        read -rp "  API Base URL [${api_base_url:-$default_url}]: " new_url
+        [ -n "$new_url" ] && api_base_url="$new_url"
+        [ -z "${api_base_url:-}" ] && api_base_url="$default_url"
+        echo ""
+
+        # Step 3: API Key
+        echo "  Step 3: API Key"
+        if [ "$provider" = "anthropic" ]; then
+            echo "  Get your key at: https://console.anthropic.com/"
+        fi
+        read -rsp "  API Key (input hidden): " api_key
+        echo
+        if [ -z "$api_key" ]; then
+            echo "Error: API key is required" >&2
+            exit 1
+        fi
+        echo ""
+
+        # Step 4: Model
+        echo "  Step 4: Model"
+        local default_model
+        default_model="$(cfg_default "$provider" model)"
+        read -rp "  Model [${model:-$default_model}]: " new_model
+        [ -n "$new_model" ] && model="$new_model"
+        [ -z "${model:-}" ] && model="$default_model"
+        echo ""
+
+        # Step 5: Docker platform (only prompt on Apple Silicon)
+        if [ -z "${docker_platform:-}" ]; then
+            docker_platform="linux/amd64"
+            if [ "$(uname -s)" = "Darwin" ] && [ "$(uname -m)" = "arm64" ]; then
+                echo "  Step 5: Docker platform"
+                echo "  Detected: macOS arm64 (Apple Silicon)"
+                read -rp "  Docker platform [linux/amd64]: " docker_platform
+                docker_platform="${docker_platform:-linux/amd64}"
+                echo ""
+            fi
+        fi
+
+        # Summary
+        echo "  ─────────────────────────────────────"
+        echo "  Configuration summary:"
+        echo "    Provider:        ${provider}"
+        echo "    API Base URL:    ${api_base_url}"
+        echo "    Model:           ${model}"
+        echo "    Docker Platform: ${docker_platform:-linux/amd64}"
+        echo "  ─────────────────────────────────────"
+        echo ""
+
+        cfg_save_all
+        echo "  ✓ Config saved to ~/.onecode/settings.json"
+        echo ""
+        echo "  Quick start:"
+        echo "    oc              # interactive Claude CLI"
+        echo "    oc remote       # web terminal at http://localhost:7681"
+        echo ""
+
+        export API_KEY="$api_key" API_BASE_URL="${api_base_url:-}" MODEL="${model:-}"
+        return 0
+    fi
+
+    # ── Returning user: confirm 3 key attributes ──────────────────
+    local key_display="****${api_key: -4}"
+    echo ""
+    echo "  ── Current Configuration ────────────"
+    echo "    Provider:     ${provider}"
+    echo "    API Base URL: ${api_base_url}"
+    echo "    API Key:      ${key_display}"
+    echo "    Model:        ${model}"
+    echo "  ─────────────────────────────────────"
+    echo ""
+    read -rp "  是否重新配置? (Y/n) " confirm_choice
+    echo ""
+
+    case "$confirm_choice" in
+        y|Y)
+            # Modify each attribute: Provider → Base URL → API Key → Model
+            echo "  Modify Provider (Enter to keep current: ${provider})"
+            echo "    1) Anthropic         2) OpenAI Compatible  3) Custom"
+            read -rp "  Select [1-3] or Enter to skip: " new_provider_choice
+            case "$new_provider_choice" in
+                1) provider="anthropic" ;;
+                2) provider="openai_compatible" ;;
+                3) read -rp "  Provider name: " new_provider; [ -n "$new_provider" ] && provider="$new_provider" ;;
+            esac
+
+            echo ""
+            echo "  Modify API Base URL (Enter to keep current: ${api_base_url})"
+            read -rp "  New API Base URL: " new_url
+            [ -n "$new_url" ] && api_base_url="$new_url"
+
+            echo ""
+            echo "  Modify API Key (Enter to keep current: ${key_display})"
+            read -rsp "  New API Key (input hidden): " new_key
+            echo
+            [ -n "$new_key" ] && api_key="$new_key"
+
+            echo ""
+            echo "  Modify Model (Enter to keep current: ${model})"
+            read -rp "  New Model: " new_model
+            [ -n "$new_model" ] && model="$new_model"
+
+            echo ""
+            cfg_save_all
+            echo "  ✓ Config updated"
+            echo ""
+            ;;
+    esac
+
+    export API_KEY="${api_key}" API_BASE_URL="${api_base_url:-}" MODEL="${model:-}"
+}
+
+# ── Docker common args ────────────────────────────────────────────
+CONTAINER_NAME=""
+WORKDIR=""
+
+build_docker_args() {
+    local name="${CONTAINER_NAME:-oc-$(basename "$(pwd)")-$$_$(date +%s)}"
+    local dir="${WORKDIR:-$(pwd)}"
+    local oc_name="${CONTAINER_NAME:-$(basename "$(pwd)")}"
+    # Backend: CLI flag > settings.json > default (claude-code)
+    local backend="${OC_BACKEND:-${backend:-claude-code}}"
+    args=(
+        --platform "${docker_platform:-linux/amd64}"
+        --name "$name"
+        -v "${dir}":/workspace
+        -w /workspace
+        -e "API_BASE_URL=${api_base_url:-}"
+        -e "API_KEY=${api_key:-}"
+        -e "MODEL=${model:-}"
+        -e "OC_NAME=$oc_name"
+        -e "BACKEND=$backend"
+    )
+    # .ssh mounted read-only by default (for git)
+    local ssh_dir="${SSH_DIR:-$HOME/.ssh}"
+    [ -d "$ssh_dir" ] && args+=(-v "$ssh_dir":/home/work/.ssh:ro)
+
+    # Mount host Docker socket if available (enables docker build inside container)
+    # Silently skipped if socket doesn't exist on host — zero user friction.
+    # Socket access for the node user is handled in entrypoint.sh (chmod 666
+    # when socket is root:root; usermod+chown when root:docker).
+    local docker_sock="/var/run/docker.sock"
+    [ -S "$docker_sock" ] && args+=(-v "$docker_sock":/var/run/docker.sock)
+
+    if git config --global user.name &>/dev/null; then
+        args+=(-e "GIT_AUTHOR_NAME=$(git config --global user.name)")
+        args+=(-e "GIT_COMMITTER_NAME=$(git config --global user.name)")
+    fi
+    if git config --global user.email &>/dev/null; then
+        args+=(-e "GIT_AUTHOR_EMAIL=$(git config --global user.email)")
+        args+=(-e "GIT_COMMITTER_EMAIL=$(git config --global user.email)")
+    fi
+
+    # Claude Code local cache — avoid re-downloading on every container start.
+    # Bind-mounted from host ~/.local/share/onecode/claude-code/ (XDG_DATA_HOME aware).
+    # Inside the container, entrypoint.sh installs to /opt/claude-code via --prefix.
+    local claude_cache_dir="${XDG_DATA_HOME:-$HOME/.local/share}/onecode/claude-code"
+    mkdir -p "$claude_cache_dir"
+    args+=(-v "$claude_cache_dir:/opt/claude-code")
+}
+
+# ── Help ──────────────────────────────────────────────────────────
+show_help() {
+    local cmd="${1:-}"
+    if [ -n "$cmd" ]; then
+        show_command_help "$cmd"
+        return
+    fi
+    cat <<EOF
+oc — OneCode CLI (shorthand for OneCode)
+
+Usage: oc [options] <command> [command-args]
+
+Commands:
+  run       Start interactive Claude CLI in a container (default)
+  remote    Start Web terminal for browser access
+  ssh       Enable SSH and add public key to a running container
+  shell     Enter container shell (new or attach existing)
+  stop      Stop and remove a container
+  update    Pull latest image and optionally restart containers
+  ls        List oc containers and image
+  config    Show or update configuration (try: oc config list)
+  help      Show help (this message, or help for a specific command)
+
+Global Options:
+  -n NAME       Container name (default: oc-<dir>-<pid>-<ts>)
+  -d DIR        Local directory to mount (default: current directory)
+  -p PORT       Web terminal port (remote mode, default: 7681)
+  -a PORT       App service port (AI-generated services, default: 8000)
+  -s PORT       SSH port (optional, enables SSH server in container)
+  --backend NAME  AI backend: claude-code (default) or opencode
+  --tag TAG     Image tag (default: latest, prefers local image)
+  --https       Enable HTTPS on gateway (self-signed cert, for direct non-localhost access)
+  --debug       Show full docker commands and container logs for troubleshooting
+  -v, --version Show version
+  -h            Show help
+
+Quick Start:
+  oc                                    # interactive CLI (claude-code backend)
+  oc remote                             # web terminal at http://localhost:7681
+  oc --backend opencode remote          # web terminal with OpenCode backend
+  oc --tag 0.5.0 remote              # use tag 0.5.0 (prefers local image)
+  oc --https remote                     # HTTPS with self-signed cert
+  oc ssh <name>                         # enable SSH on running container
+
+Run 'oc help <command>' for details on a specific command.
+EOF
+    exit 0
+}
+
+show_command_help() {
+    local cmd="$1"
+    case "$cmd" in
+        run)
+            cat <<EOF
+oc run — Start interactive Claude CLI
+
+Usage: oc run [claude-args]
+
+Starts a container with Claude Code CLI in interactive mode.
+Your current directory is mounted at /workspace inside the container.
+Any additional arguments are passed directly to the 'claude' command.
+
+Options (global):
+  -n NAME     Container name
+  -d DIR      Local directory to mount (default: current directory)
+
+Examples:
+  oc                                  # start Claude in current directory
+  oc -d /path/to/project             # mount a specific project
+  oc -n my-agent                     # named container
+  oc run "Explain this code"         # pass prompt to claude
+  oc run --dangerously-skip-permissions  # pass claude flags
+
+The container is removed automatically when you exit ( --rm ).
+EOF
+            ;;
+        remote)
+            cat <<EOF
+oc remote — Start Web terminal for browser access
+
+Usage: oc remote [options]
+
+Starts a container in detached mode with a web-based terminal (ttyd).
+Open the printed URL in your browser to interact with Claude Code.
+SSH is disabled by default. Use -s PORT to enable (or ENABLE_SSH=1 env var).
+
+Options (global):
+  -n NAME     Container name
+  -d DIR      Local directory to mount
+  -p PORT     Web terminal port on host (default: 7681)
+  -a PORT     App service port on host (AI-generated services, default: 8000)
+  --https     Enable HTTPS on gateway (self-signed cert, for non-localhost access)
+
+Environment:
+  TTYD_TOKEN    If set, requires this token for web terminal access
+  GATEWAY_HTTPS Set to 1 to enable HTTPS on the gateway
+
+Examples:
+  oc remote                           # web terminal at http://localhost:7681
+  oc --https remote                   # HTTPS mode (self-signed cert)
+  oc -p 8080 remote                   # custom port
+  oc -n my-agent -d /src/project remote
+
+After starting, you can:
+  oc ssh <name>                       # enable SSH access
+  oc shell <name>                     # enter the container
+  oc stop <name>                      # stop the container
+EOF
+            ;;
+        ssh)
+            cat <<EOF
+oc ssh — Enable SSH and add public key to a running container
+
+Usage: oc ssh <name> [public-key] [-s PORT]
+
+Adds your SSH public key to a running container's authorized_keys,
+then sets up port forwarding so you can connect from the host.
+Requires 'socat' on the host for automatic port forwarding.
+
+Arguments:
+  <name>        Running container name or ID
+  [public-key]  SSH public key string (optional, auto-detected if omitted)
+
+Options:
+  -s PORT       Host-side SSH port (default: 8222)
+
+Key Auto-Detection (when no public-key is given):
+  Reads the first found file from:
+    ~/.ssh/id_ed25519.pub
+    ~/.ssh/id_rsa.pub
+    ~/.ssh/id_ecdsa.pub
+
+Port Forwarding:
+  Uses socat to forward host:SSH_PORT -> container_ip:8222
+  Install socat: apt install socat (or yum install socat)
+
+Examples:
+  oc ssh my-agent                     # auto-detect key, default port
+  oc ssh my-agent -s 2222             # custom host port
+  oc ssh my-agent "ssh-rsa AAA..."    # specific public key
+
+VS Code ~/.ssh/config after enabling:
+  Host oc
+      HostName <server-ip>
+      Port 8222
+      User node
+      IdentityFile ~/.ssh/id_rsa
+
+Notes:
+  - SSH uses public key authentication only (no passwords)
+  - The container must already be running (use 'oc remote' first)
+  - .ssh directory is mounted read-only from host for git;
+    'oc ssh' adds keys via docker exec into the container
+EOF
+            ;;
+        shell)
+            cat <<EOF
+oc shell — Enter container shell
+
+Usage: oc shell [name]
+
+If a container name/ID is given, opens an interactive bash shell
+inside the running container. Otherwise starts a new container
+with a bash shell.
+
+Arguments:
+  [name]  Running container name or ID (omit to start a new shell container)
+
+Options (when starting new container):
+  -n NAME     Container name
+  -d DIR      Local directory to mount
+
+Examples:
+  oc shell                            # new container with bash shell
+  oc shell my-agent                   # attach to running container
+  oc -d /path/to/project shell        # new shell with specific mount
+EOF
+            ;;
+        stop)
+            cat <<EOF
+oc stop — Stop and remove a container
+
+Usage: oc stop <name>
+
+Stops the container and removes it. Also kills any socat
+port forwarding process associated with this container's SSH port.
+
+Arguments:
+  <name>  Container name or ID
+
+Examples:
+  oc stop my-agent
+
+Note: Containers started with 'oc remote' use --rm, so stopping
+them also removes the container automatically.
+EOF
+            ;;
+        update)
+            cat <<EOF
+oc update — Pull image and optionally restart containers
+
+Usage: oc update [options]
+
+Pulls the onecode image from the registry.
+Also updates the oc CLI itself by running install.sh from the remote.
+If running containers are detected, offers to restart them
+with the new image (preserving the same name, mounts, and env).
+
+Options:
+  --tag TAG     Pull a specific version instead of default (e.g. 0.2)
+  --restart     Restart all running oc containers after pulling
+  --yes         Skip confirmation prompts
+
+Examples:
+  oc update                           # pull latest image
+  oc update --tag 0.2                 # pull specific version
+  oc update --restart                 # pull and restart running containers
+  oc update --restart --yes           # pull and restart without prompt
+EOF
+            ;;
+        ls)
+            cat <<EOF
+oc ls — List oc containers and image
+
+Usage: oc ls
+
+Shows all containers using the onecode image and the
+available image versions.
+
+Output:
+  Containers section — name, status, port mappings
+  Image section      — repository:tag, size, created time
+
+Examples:
+  oc ls
+EOF
+            ;;
+        config)
+            cat <<EOF
+oc config — Show or update saved configuration
+
+Usage: oc config [command] [args]
+
+Commands:
+  (none)            Show all settings (api_key masked)
+  get <key>         Get a single key's effective value (shows source)
+  set <key>=<val>   Set one or more keys (supports v1 names: API_KEY, MODEL)
+  set               Interactive setup wizard
+  list              Show all keys, effective values, and sources
+  reset <key>       Reset a key to its default value
+  reset --all       Reset everything to defaults (keeps api_key)
+  path              Print the config file path
+  validate          Validate all values, report problems
+
+Configuration file: ~/.onecode/settings.json (permissions: 600)
+
+Keys (v2):
+  provider          API provider (anthropic, openai_compatible)
+  api_key           API authentication key
+  api_base_url      API endpoint URL
+  model             Default model name
+  docker_platform   Docker platform (linux/amd64, linux/arm64)
+  image_tag         Image tag (default: latest)
+  gh_mirror         GitHub mirror URL (empty = direct)
+  gateway_port      Web terminal port (default: 7681)
+  app_port          App service port (default: 8000)
+  ssh_port          SSH port (default: 8222)
+  term_token        Terminal auth token
+  gateway_https     Enable HTTPS (true/false)
+
+Priority: Environment variables > Config file > Provider defaults > Hardcoded
+
+Examples:
+  oc config                           # show current config
+  oc config list                      # show all keys with sources
+  oc config get model                 # show effective model value
+  oc config set api_key=sk-ant-xxx    # set API key directly
+  oc config set API_KEY=sk-xxx        # v1 alias also works
+  oc config set MODEL=gpt-4o api_base_url=https://api.openai.com/v1
+  oc config validate                  # check for problems
+  oc config reset model               # reset model to default
+EOF
+            ;;
+        help)
+            cat <<EOF
+oc help — Show help
+
+Usage: oc help [command]
+
+Show general help, or detailed help for a specific command.
+
+Examples:
+  oc help                             # general help
+  oc help remote                      # help for 'remote' command
+  oc help ssh                         # help for 'ssh' command
+EOF
+            ;;
+        *)
+            echo "Unknown command: $cmd" >&2
+            echo "Run 'oc help' to see available commands." >&2
+            exit 1
+            ;;
+    esac
+    exit 0
+}
+
+# ── Parse global options ──────────────────────────────────────────
+COMMAND=""
+PORT=""
+APP_PORT=""
+SSH_PORT=""
+GATEWAY_HTTPS=""
+OC_DEBUG=""
+OC_BACKEND=""
+
+while [ $# -gt 0 ]; do
+    case "$1" in
+        -n)          CONTAINER_NAME="$2"; shift 2 ;;
+        -d)          WORKDIR="$2"; shift 2 ;;
+        -p)          PORT="$2"; shift 2 ;;
+        -a)          APP_PORT="$2"; shift 2 ;;
+        -s)          SSH_PORT="$2"; shift 2 ;;
+        --backend)   OC_BACKEND="$2"; shift 2 ;;
+        --tag)       IMAGE_TAG="$2"; shift 2 ;;
+        --https)    GATEWAY_HTTPS="1"; shift ;;
+        --debug)    OC_DEBUG="1"; shift ;;
+        -h|--help)   show_help ;;
+        -v|--version) echo "oc ${OC_VERSION}"; exit 0 ;;
+        run|remote|ssh|shell|stop|update|ls|config|help)
+                     COMMAND="$1"; shift; break ;;
+        *)           COMMAND="run"; break ;;
+    esac
+done
+
+# Default command
+COMMAND="${COMMAND:-run}"
+
+# Parse subcommand-specific options
+while [ $# -gt 0 ]; do
+    case "$1" in
+        -n)        CONTAINER_NAME="$2"; shift 2 ;;
+        -d)        WORKDIR="$2"; shift 2 ;;
+        -p)        PORT="$2"; shift 2 ;;
+        -a)        APP_PORT="$2"; shift 2 ;;
+        -s)        SSH_PORT="$2"; shift 2 ;;
+        --backend)   OC_BACKEND="$2"; shift 2 ;;
+        --tag)     IMAGE_TAG="$2"; shift 2 ;;
+        --https)    GATEWAY_HTTPS="1"; shift ;;
+        --debug)    OC_DEBUG="1"; shift ;;
+        -v|--version) echo "oc ${OC_VERSION}"; exit 0 ;;
+        *)  break ;;
+    esac
+done
+
+# Image resolution: local-first strategy
+# --tag 0.5.0 → check onecode:0.5.0 (local) first, then remote
+# No tag → check onecode:latest (local) first, then remote
+# AGENT_RUNTIME_IMAGE → used as-is (user has full control)
+if [ -z "${AGENT_RUNTIME_IMAGE:-}" ]; then
+    _tag="${IMAGE_TAG:-latest}"
+    if docker image inspect "${LOCAL_IMAGE}:${_tag}" &>/dev/null; then
+        IMAGE="${LOCAL_IMAGE}:${_tag}"
+    else
+        IMAGE="${IMAGE_REPO}:${_tag}"
+    fi
+fi
+
+# ── Debug helper ───────────────────────────────────────────────────
+debug_log() {
+    [ "${OC_DEBUG:-}" = "1" ] || return 0
+    echo "[debug] $*" >&2
+}
+
+debug_cmd() {
+    [ "${OC_DEBUG:-}" = "1" ] || return 0
+    echo "[debug] command: $*" >&2
+}
+
+# ── Subcommands ───────────────────────────────────────────────────
+
+cmd_run() {
+    resolve_config
+    build_docker_args
+    args+=(--rm -it "$IMAGE" claude)
+    # Pull image if not cached (interactive run also needs the image)
+    if ! docker image inspect "$IMAGE" &>/dev/null; then
+        clack_step "Pulling image"
+        clack_dim "Image not found locally..."
+        docker pull "$IMAGE" 2>&1 || {
+            clack_err "Failed to pull image ${IMAGE}"
+            exit 1
+        }
+        clack_ok "Image pulled"
+    fi
+    debug_cmd docker run "${args[@]}" "$@"
+    exec docker run "${args[@]}" "$@"
+}
+
+cmd_remote() {
+    # ── Step 1: Resolve config ────────────────────────────────────────
+    clack_step "Resolving config"
+    resolve_config
+    build_docker_args
+    clack_ok "Config resolved (backend: ${backend:-claude-code})"
+
+    # Port priority: CLI flag (-p) > settings.json > default
+    local p="${PORT:-${gateway_port:-7681}}"
+    local ap="${APP_PORT:-${app_port:-8000}}"
+    args+=(
+        -d
+        -p "${p}:7681"
+        -p "${ap}:8000"
+        -e "TTYD_PORT=7681"
+        -e "APP_PORT=8000"
+    )
+    [ -n "${TTYD_TOKEN:-}" ] && args+=(-e "TTYD_TOKEN=$TTYD_TOKEN")
+    [ -n "${GATEWAY_HTTPS:-}" ] && args+=(-e "GATEWAY_HTTPS=$GATEWAY_HTTPS")
+    # SSH: only expose when -s PORT is explicitly provided
+    if [ -n "${SSH_PORT:-}" ]; then
+        local sp="${SSH_PORT}"
+        args+=(-p "${sp}:8222" -e "ENABLE_SSH=1")
+        args+=(--label "oc.ssh_port=${sp}")
+    fi
+    args+=("$IMAGE" remote)
+
+    # ── Step 2: Pull image ───────────────────────────────────────────
+    clack_step "Preparing container image"
+    local pull_start=0
+    if ! docker image inspect "$IMAGE" &>/dev/null; then
+        clack_dim "Image not found locally, pulling..."
+        pull_start=$(date +%s)
+        if ! docker pull "$IMAGE" 2>&1; then
+            clack_err "Failed to pull image ${IMAGE}"
+            echo "  Try: docker pull ${IMAGE}" >&2
+            exit 1
+        fi
+        local pull_end
+        pull_end=$(date +%s)
+        clack_ok "Image pulled (${IMAGE}) ${DIM}($((pull_end - pull_start))s)${NC}"
+    else
+        clack_ok "Image cached (${IMAGE})"
+    fi
+
+    # ── Step 3: Start container ──────────────────────────────────────
+    clack_step "Starting container"
+    debug_cmd docker run "${args[@]}"
+    local container_id
+    container_id=$(docker run "${args[@]}" 2>&1) || {
+        clack_err "Failed to start container"
+        echo "$container_id" >&2
+        exit 1
+    }
+    # Validate: on success docker run outputs a 64-char hex container ID
+    if [[ ! "$container_id" =~ ^[0-9a-f]{64}$ ]]; then
+        clack_err "Failed to start container"
+        echo "$container_id" >&2
+        exit 1
+    fi
+    debug_log "container_id: ${container_id}"
+    local actual_name
+    actual_name=$(docker inspect "$container_id" --format '{{.Name}}' 2>/dev/null | sed 's/^\///') || actual_name="${CONTAINER_NAME:-oc-$(basename "$(pwd)")}"
+    clack_ok "Container started (${actual_name})"
+
+    # ── Step 4: Health check ─────────────────────────────────────────
+    clack_step "Waiting for services"
+    # Verify container is still running (not crashed after start)
+    local container_state
+    container_state=$(docker inspect "$container_id" --format '{{.State.Status}}' 2>/dev/null || echo "gone")
+    if [ "$container_state" != "running" ]; then
+        clack_err "Container exited immediately (status: ${container_state})"
+        local exit_code
+        exit_code=$(docker inspect "$container_id" --format '{{.State.ExitCode}}' 2>/dev/null || echo "?")
+        clack_line "Exit code: ${exit_code}"
+        clack_line "Container logs:"
+        docker logs "$container_id" 2>&1 | tail -20 | while IFS= read -r line; do
+            clack_dim "$line"
+        done
+        exit 1
+    fi
+
+    # Poll gateway port until it responds (max 90s for first-time setup)
+    local health_s
+    if health_s=$(spin_until_cmd "Gateway starting on :${p}..." "curl -sf http://localhost:${p}/ -o /dev/null" 90); then
+        clack_ok "Gateway ready at :${p} ${DIM}(${health_s}s)${NC}"
+    else
+        # Gateway may still be starting; show warning
+        clack_warn "Gateway not responding yet (may still be initializing)"
+        if [ "${OC_DEBUG:-}" = "1" ]; then
+            docker logs "$container_id" 2>&1 | tail -10 | while IFS= read -r line; do
+                clack_dim "$line"
+            done
+        fi
+    fi
+
+    # ── Done ────────────────────────────────────────────────────────
+    local proto="http"
+    [ "${GATEWAY_HTTPS:-0}" = "1" ] && proto="https"
+    local display_backend="${backend:-claude-code}"
+    echo ""
+    echo "  ${GREEN}${BOLD}OneCode running${NC}"
+    echo ""
+    echo "  Web:       ${proto}://localhost:${p}"
+    echo "  App:       ${proto}://localhost:${ap}  ${DIM}(AI-generated services)${NC}"
+    echo "  Backend:   ${display_backend}"
+    echo "  Container: ${actual_name}"
+    echo ""
+    if [ "$display_backend" = "claude-code" ]; then
+        echo "  ${DIM}First start: Claude Code CLI is installing in background (~30-60s)${NC}"
+        echo "  ${DIM}You can open the Web UI immediately — terminal will auto-start when ready.${NC}"
+        echo ""
+    fi
+    echo "  ${DIM}oc shell ${actual_name}            # enter container${NC}"
+    echo "  ${DIM}oc stop ${actual_name}             # stop container${NC}"
+    if [ -n "${SSH_PORT:-}" ]; then
+        echo "  ${DIM}oc ssh ${actual_name}              # enable SSH${NC}"
+    fi
+}
+
+cmd_ssh() {
+    if [ -z "${1:-}" ]; then
+        echo "Usage: oc ssh <name> [public-key] [-s PORT]" >&2
+        echo "" >&2
+        echo "  Note: SSH is disabled by default. Start container with -s PORT or ENABLE_SSH=1." >&2
+        echo "" >&2
+        echo "  oc ssh my-agent                           # auto-detect key from ~/.ssh/*.pub" >&2
+        echo "  oc ssh my-agent -s 2222                   # use custom port" >&2
+        echo "  oc ssh my-agent \"ssh-rsa AAA...\"           # use specific key" >&2
+        exit 1
+    fi
+    local name="$1"
+    shift
+
+    # Parse ssh-specific options
+    local ssh_key=""
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            -s) SSH_PORT="$2"; shift 2 ;;
+            *)  ssh_key="$1"; shift ;;
+        esac
+    done
+
+    # Auto-detect key if not provided
+    if [ -z "$ssh_key" ] && [ -d "$HOME/.ssh" ]; then
+        local pub_file=""
+        for f in "$HOME/.ssh/id_ed25519.pub" "$HOME/.ssh/id_rsa.pub" "$HOME/.ssh/id_ecdsa.pub"; do
+            if [ -f "$f" ]; then
+                pub_file="$f"
+                break
+            fi
+        done
+        if [ -n "$pub_file" ]; then
+            ssh_key=$(cat "$pub_file")
+            echo "Using key from ${pub_file}"
+        fi
+    fi
+
+    if [ -z "$ssh_key" ]; then
+        echo "Error: no public key found. Provide one explicitly:" >&2
+        echo "  oc ssh ${name} \"ssh-rsa AAA...\"" >&2
+        exit 1
+    fi
+
+    # Add key to container's authorized_keys (writable path, .ssh is read-only mount)
+    # Use stdin to avoid shell injection from SSH key content
+    debug_cmd docker exec -i "$name" bash -c '...'
+    docker exec -i "$name" bash -c '
+        mkdir -p /home/work/.ssh-keys
+        read -r key
+        grep -qF "$key" /home/work/.ssh-keys/authorized_keys 2>/dev/null || echo "$key" >> /home/work/.ssh-keys/authorized_keys
+        chown -R node:node /home/work/.ssh-keys
+        chmod 700 /home/work/.ssh-keys
+        chmod 600 /home/work/.ssh-keys/authorized_keys
+    ' <<< "$ssh_key"
+
+    # Set up port forwarding: host:SSH_PORT -> container:8222
+    # Use docker port mapping via iptables/socat since container is already running
+    local container_ip
+    debug_cmd docker inspect "$name" --format '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}'
+    container_ip=$(docker inspect "$name" --format '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' 2>/dev/null || true)
+
+    # Use socat to forward port if available, otherwise print manual instructions
+    if command -v socat &>/dev/null; then
+        # Kill any existing socat on this port
+        pkill -f "socat TCP-LISTEN:${SSH_PORT}" 2>/dev/null || true
+        nohup socat TCP-LISTEN:${SSH_PORT},fork,reuseaddr TCP:${container_ip}:8222 >/dev/null 2>&1 &
+        local server_ip
+        server_ip=$(hostname -I 2>/dev/null | awk '{print $1}' || echo "<server-ip>")
+        echo "SSH enabled:"
+        echo "  ssh -p ${SSH_PORT} node@${server_ip}"
+        echo ""
+        echo "VS Code ~/.ssh/config:"
+        echo "  Host oc"
+        echo "      HostName ${server_ip}"
+        echo "      Port ${SSH_PORT}"
+        echo "      User node"
+        echo "      IdentityFile ~/.ssh/id_rsa"
+    else
+        echo "SSH enabled (key added). Container IP: ${container_ip}:8222"
+        echo ""
+        echo "Install socat for automatic port forwarding:"
+        echo "  apt install socat   # or yum install socat"
+        echo ""
+        echo "Then re-run: oc ssh ${name}"
+        echo ""
+        echo "Or connect directly from this server:"
+        echo "  ssh -p 8222 node@${container_ip}"
+    fi
+}
+
+cmd_shell() {
+    # If a name/id is given, attach to existing container
+    if [ -n "${1:-}" ]; then
+        debug_cmd docker exec -it "$1" /bin/bash
+        exec docker exec -it "$1" /bin/bash
+    fi
+    # Otherwise start a new shell container
+    resolve_config
+    build_docker_args
+    args+=(--rm -it "$IMAGE" /bin/bash)
+    debug_cmd docker run "${args[@]}"
+    exec docker run "${args[@]}"
+}
+
+cmd_stop() {
+    if [ -z "${1:-}" ]; then
+        echo "Usage: oc stop <name>" >&2
+        exit 1
+    fi
+    # Kill socat forwarding — read the actual SSH port from the container label
+    # (handles custom ports set via -s during 'oc remote')
+    local stop_ssh_port
+    debug_cmd docker inspect "$1" --format '{{index .Config.Labels "oc.ssh_port"}}'
+    stop_ssh_port=$(docker inspect "$1" --format '{{index .Config.Labels "oc.ssh_port"}}' 2>/dev/null) || true
+    stop_ssh_port="${stop_ssh_port:-${SSH_PORT}}"
+    pkill -f "socat TCP-LISTEN:${stop_ssh_port}" 2>/dev/null || true
+    debug_cmd docker stop "$1"
+    debug_cmd docker rm "$1"
+    docker stop "$1" 2>/dev/null && docker rm "$1" 2>/dev/null
+    echo "Container $1 removed"
+}
+
+cmd_ls() {
+    echo "=== Containers ==="
+    docker ps -a --format "{{.ID}}\t{{.Names}}\t{{.Status}}\t{{.Ports}}" 2>/dev/null | while IFS=$'\t' read -r id name status ports; do
+        img=$(docker inspect "$id" --format '{{.Config.Image}}' 2>/dev/null || true)
+        if echo "$img" | grep -q "onecode"; then
+            mount_src=$(docker inspect "$id" --format '{{range .Mounts}}{{if eq .Destination "/workspace"}}{{.Source}}{{end}}{{end}}' 2>/dev/null || true)
+            printf "%s\t%s\t%s\t%s\n" "$name" "$status" "$ports" "$mount_src"
+        fi
+    done | column -t -s $'\t' 2>/dev/null || true
+    echo ""
+    echo "=== Image ==="
+    docker images "ghcr.io/yiyan-yixing/onecode" --format "table {{.Repository}}:{{.Tag}}\t{{.Size}}\t{{.CreatedAt}}" 2>/dev/null || true
+}
+
+cmd_config() {
+    local subcmd="${1:-}"
+    case "$subcmd" in
+        set)      shift; cmd_config_set "$@" ;;
+        get)      shift; cmd_config_get "$@" ;;
+        list)     shift; cmd_config_list "$@" ;;
+        reset)    shift; cmd_config_reset "$@" ;;
+        path)     echo "$OC_CONFIG" ;;
+        validate) shift; cmd_config_validate "$@" ;;
+        *)
+            # Default: show masked config
+            if [ -f "$OC_CONFIG" ]; then
+                echo "Config: $OC_CONFIG"
+                jq '.' "$OC_CONFIG" | jq -r '
+                    to_entries |
+                    map(
+                        if .key == "api_key" and (.value | length) > 4
+                        then .key + ": " + "****" + (.value | .[-4:])
+                        elif .key == "api_key"
+                        then .key + ": ****"
+                        elif .key == "term_token" and (.value | length) > 0
+                        then .key + ": ****"
+                        elif .value | type == "boolean"
+                        then .key + ": " + (.value | tostring)
+                        elif .value | type == "number"
+                        then .key + ": " + (.value | tostring)
+                        else .key + ": " + .value
+                        end
+                    ) |
+                    .[]
+                ' 2>/dev/null || cat "$OC_CONFIG"
+            else
+                echo "No config file ($OC_CONFIG)"
+                echo "Run 'oc config set' to configure."
+            fi
+            ;;
+    esac
+}
+
+cmd_config_get() {
+    local key="$1"
+    if [ -z "$key" ]; then
+        echo "Usage: oc config get <key>" >&2
+        echo "  Keys: provider, api_key, api_base_url, model, backend, docker_platform, image_tag, gh_mirror, gateway_port, app_port, ssh_port, term_token, gateway_https" >&2
+        return 1
+    fi
+    key=$(cfg_normalize_key "$key")
+
+    # Resolve effective value with source tracing
+    local env_val="" env_name="" source=""
+
+    # Map v2 keys to env var names
+    case "$key" in
+        api_key)      env_val="${API_KEY:-}";  env_name="API_KEY" ;;
+        api_base_url) env_val="${API_BASE_URL:-}"; env_name="API_BASE_URL" ;;
+        model)        env_val="${MODEL:-}";    env_name="MODEL" ;;
+        docker_platform) env_val="${AGENT_RUNTIME_PLATFORM:-}"; env_name="AGENT_RUNTIME_PLATFORM" ;;
+        gateway_port) env_val="${GATEWAY_PORT:-}"; env_name="GATEWAY_PORT" ;;
+        app_port)     env_val="${APP_PORT:-}"; env_name="APP_PORT" ;;
+        ssh_port)     env_val="${SSH_PORT:-}";  env_name="SSH_PORT" ;;
+        term_token)   env_val="${TTYD_TOKEN:-}"; env_name="TTYD_TOKEN" ;;
+        gateway_https) env_val="${GATEWAY_HTTPS:-}"; env_name="GATEWAY_HTTPS" ;;
+    esac
+
+    if [ -n "$env_val" ]; then
+        # Mask sensitive values in output
+        if [ "$key" = "api_key" ]; then
+            echo "****${env_val: -4}  (from: env var $env_name)"
+        elif [ "$key" = "term_token" ]; then
+            echo "****  (from: env var $env_name)"
+        else
+            echo "$env_val  (from: env var $env_name)"
+        fi
+        return
+    fi
+
+    # Try settings.json
+    local file_val
+    file_val=$(cfg_get "$key" 2>/dev/null) || true
+    if [ -n "$file_val" ]; then
+        if [ "$key" = "api_key" ]; then
+            echo "****${file_val: -4}  (from: settings.json)"
+        elif [ "$key" = "term_token" ]; then
+            echo "****  (from: settings.json)"
+        else
+            echo "$file_val  (from: settings.json)"
+        fi
+        return
+    fi
+
+    # Try provider default
+    local prov
+    prov=$(cfg_get provider 2>/dev/null) || prov="anthropic"
+    local def_val
+    def_val=$(cfg_default "$prov" "$key" 2>/dev/null) || true
+    if [ -n "$def_val" ]; then
+        echo "$def_val  (from: default, provider=$prov)"
+        return
+    fi
+
+    # Hardcoded defaults
+    case "$key" in
+        docker_platform) echo "linux/amd64  (from: default)" ;;
+        image_tag)       echo "latest  (from: default)" ;;
+        gateway_port)    echo "7681  (from: default)" ;;
+        app_port)        echo "8000  (from: default)" ;;
+        ssh_port)        echo "8222  (from: default)" ;;
+        gateway_https)   echo "false  (from: default)" ;;
+        gh_mirror)       echo "https://gh-proxy.com  (from: default)" ;;
+        provider)        echo "anthropic  (from: default)" ;;
+        backend)         echo "claude-code  (from: default)" ;;
+        *)               echo "(not set)" ;;
+    esac
+}
+
+cmd_config_list() {
+    local keys=(provider api_key api_base_url model backend docker_platform image_tag gh_mirror gateway_port app_port ssh_port term_token gateway_https)
+    local file_data="{}"
+    [ -f "$OC_CONFIG" ] && file_data=$(cat "$OC_CONFIG")
+
+    printf "%-18s %-30s %s\n" "KEY" "VALUE" "SOURCE"
+    printf "%-18s %-30s %s\n" "---" "-----" "------"
+
+    for key in "${keys[@]}"; do
+        local env_val="" env_name="" val="" source=""
+
+        # Check env var
+        case "$key" in
+            api_key)      env_val="${API_KEY:-}";  env_name="API_KEY" ;;
+            api_base_url) env_val="${API_BASE_URL:-}"; env_name="API_BASE_URL" ;;
+            model)        env_val="${MODEL:-}";    env_name="MODEL" ;;
+            docker_platform) env_val="${AGENT_RUNTIME_PLATFORM:-}"; env_name="AGENT_RUNTIME_PLATFORM" ;;
+            gateway_port) env_val="${GATEWAY_PORT:-}"; env_name="GATEWAY_PORT" ;;
+            app_port)     env_val="${APP_PORT:-}"; env_name="APP_PORT" ;;
+            ssh_port)     env_val="${SSH_PORT:-}";  env_name="SSH_PORT" ;;
+            term_token)   env_val="${TTYD_TOKEN:-}"; env_name="TTYD_TOKEN" ;;
+            gateway_https) env_val="${GATEWAY_HTTPS:-}"; env_name="GATEWAY_HTTPS" ;;
+        esac
+
+        if [ -n "$env_val" ]; then
+            val="$env_val"
+            source="env ($env_name)"
+        else
+            # Check file
+            local file_val
+            file_val=$(echo "$file_data" | jq -r --arg k "$key" '.[$k] // empty' 2>/dev/null) || true
+            if [ -n "$file_val" ]; then
+                val="$file_val"
+                source="settings.json"
+            else
+                # Check provider default
+                local prov
+                prov=$(echo "$file_data" | jq -r '.provider // "anthropic"' 2>/dev/null)
+                local def_val
+                def_val=$(cfg_default "$prov" "$key" 2>/dev/null) || true
+                if [ -n "$def_val" ]; then
+                    val="$def_val"
+                    source="default ($prov)"
+                else
+                    # Hardcoded defaults
+                    case "$key" in
+                        docker_platform) val="linux/amd64"; source="default" ;;
+                        image_tag)       val="latest"; source="default" ;;
+                        gateway_port)    val="7681"; source="default" ;;
+                        app_port)        val="8000"; source="default" ;;
+                        ssh_port)        val="8222"; source="default" ;;
+                        gateway_https)   val="false"; source="default" ;;
+                        gh_mirror)       val="https://gh-proxy.com"; source="default" ;;
+                        provider)        val="anthropic"; source="default" ;;
+                        backend)         val="claude-code"; source="default" ;;
+                        *)               val="(not set)"; source="" ;;
+                    esac
+                fi
+            fi
+        fi
+
+        # Mask sensitive values
+        case "$key" in
+            api_key)
+                if [ ${#val} -gt 4 ]; then
+                    val="****${val: -4}"
+                elif [ -n "$val" ]; then
+                    val="****"
+                fi
+                ;;
+            term_token)
+                [ -n "$val" ] && val="****"
+                ;;
+        esac
+
+        # Truncate long values for display
+        [ ${#val} -gt 28 ] && val="${val:0:25}..."
+
+        printf "%-18s %-30s %s\n" "$key" "$val" "$source"
+    done
+}
+
+cmd_config_reset() {
+    if [ "${1:-}" = "--all" ]; then
+        # Reset everything except api_key
+        local saved_key
+        saved_key=$(cfg_get api_key 2>/dev/null) || saved_key=""
+        mkdir -p "$OC_HOME"
+        echo '{}' > "$OC_CONFIG"
+        chmod 600 "$OC_CONFIG"
+        [ -n "$saved_key" ] && cfg_set api_key "$saved_key"
+        echo "✓ Config reset to defaults (api_key preserved)"
+        return
+    fi
+
+    local key="$1"
+    if [ -z "$key" ]; then
+        echo "Usage: oc config reset <key>   or   oc config reset --all" >&2
+        return 1
+    fi
+    key=$(cfg_normalize_key "$key")
+    cfg_del "$key"
+    echo "✓ $key reset to default"
+}
+
+cmd_config_validate() {
+    require_jq
+    local has_error=false
+    local keys=(provider api_key api_base_url model backend docker_platform gateway_port app_port ssh_port gateway_https)
+    local file_data="{}"
+    [ -f "$OC_CONFIG" ] && file_data=$(cat "$OC_CONFIG")
+
+    for key in "${keys[@]}"; do
+        local val
+        val=$(echo "$file_data" | jq -r --arg k "$key" '.[$k] // empty' 2>/dev/null) || true
+        [ -z "$val" ] && continue
+
+        local err
+        err=$(cfg_validate_key "$key" "$val" 2>&1) || true
+        if [ -n "$err" ]; then
+            echo "  FAIL  $key: $err"
+            has_error=true
+        else
+            case "$key" in
+                api_key) echo "  OK    api_key: set (ends ****${val: -4})" ;;
+                *)       echo "  OK    $key: $val" ;;
+            esac
+        fi
+    done
+
+    # Check api_key is set
+    local ak
+    ak=$(echo "$file_data" | jq -r '.api_key // empty' 2>/dev/null) || true
+    if [ -z "$ak" ] || is_placeholder_key "$ak"; then
+        echo "  WARN  api_key: not set or placeholder"
+    fi
+
+    if [ "$has_error" = true ]; then
+        return 1
+    fi
+    echo ""
+    echo "Config is valid."
+}
+
+cmd_config_set() {
+    # If key=value args provided, set them directly
+    if [ $# -gt 0 ]; then
+        require_jq
+        for pair in "$@"; do
+            local key="${pair%%=*}"
+            local val="${pair#*=}"
+            key=$(cfg_normalize_key "$key")
+            cfg_set "$key" "$val"
+        done
+        echo "✓ Config saved to $OC_CONFIG"
+        return
+    fi
+
+    # Interactive mode: guided setup
+    require_jq
+
+    # Show current config
+    echo "Current configuration:"
+    cmd_config
+    echo ""
+
+    # Provider
+    local cur_provider
+    cur_provider=$(cfg_get provider 2>/dev/null) || cur_provider="anthropic"
+    echo "  1) Anthropic         (Claude models)"
+    echo "  2) OpenAI Compatible (any OpenAI-format API)"
+    read -rp "  Provider [${cur_provider}]: " new_provider
+    if [ -n "$new_provider" ]; then
+        case "$new_provider" in
+            1) provider="anthropic" ;;
+            2) provider="openai_compatible" ;;
+            *) provider="$new_provider" ;;
+        esac
+    else
+        provider="$cur_provider"
+    fi
+
+    # API Base URL
+    local cur_url
+    cur_url=$(cfg_get api_base_url 2>/dev/null) || cur_url="$(cfg_default "$provider" api_base_url)"
+    read -rp "  API Base URL [${cur_url}]: " new_url
+    api_base_url="${new_url:-$cur_url}"
+
+    # API Key
+    read -rsp "  API Key (input hidden) [current: ****]: " new_key
+    echo
+    [ -n "$new_key" ] && api_key="$new_key"
+
+    # Model
+    local cur_model
+    cur_model=$(cfg_get model 2>/dev/null) || cur_model="$(cfg_default "$provider" model)"
+    read -rp "  Model [${cur_model}]: " new_model
+    model="${new_model:-$cur_model}"
+
+    # Docker Platform
+    local cur_platform
+    cur_platform=$(cfg_get docker_platform 2>/dev/null) || cur_platform="linux/amd64"
+    read -rp "  Docker Platform [${cur_platform}]: " new_platform
+    docker_platform="${new_platform:-$cur_platform}"
+
+    # GH Mirror
+    local cur_mirror
+    cur_mirror=$(cfg_get gh_mirror 2>/dev/null) || cur_mirror="https://gh-proxy.com"
+    read -rp "  GitHub Mirror [${cur_mirror}]: " new_mirror
+    gh_mirror="${new_mirror:-$cur_mirror}"
+
+    cfg_save_all
+    echo ""
+    echo "✓ Config saved to $OC_CONFIG"
+}
+
+cmd_update() {
+    local do_restart=false
+    local auto_yes=false
+    local update_tag=""
+
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --restart) do_restart=true; shift ;;
+            --yes)     auto_yes=true; shift ;;
+            --tag)     update_tag="$2"; shift 2 ;;
+            *)         shift ;;
+        esac
+    done
+
+    # Determine target version
+    local target_version="$update_tag"
+
+    if [ -z "$target_version" ]; then
+        echo "Checking latest version via GitHub API ..."
+        target_version=$(github_fetch "agent-runtime/VERSION" | tr -d '[:space:]') || true
+        if [ -z "$target_version" ]; then
+            echo "Warning: could not fetch remote version, falling back to current image"
+            target_version="latest"
+        else
+            echo "Latest version: ${target_version}"
+        fi
+    fi
+
+    local pull_image="${IMAGE_REPO}:${target_version}"
+
+    # Pull image
+    echo "Pulling $pull_image ..."
+    debug_cmd docker pull --platform "${docker_platform:-linux/amd64}" "$pull_image"
+    docker pull --platform "${docker_platform:-linux/amd64}" "$pull_image"
+
+    # Self-update oc CLI via install.sh
+    echo "Updating oc CLI via GitHub API ..."
+    local install_script
+    install_script=$(github_fetch "agent-runtime/bin/install.sh") || true
+    if [ -n "$install_script" ]; then
+        # Verify script integrity with SHA256 if checksum file is available
+        local checksum
+        checksum=$(github_fetch "agent-runtime/bin/install.sh.sha256" || true)
+        if [ -n "$checksum" ]; then
+            local actual
+            actual=$(echo "$install_script" | sha256sum | awk '{print $1}')
+            if [ "$actual" != "$checksum" ]; then
+                echo "Error: checksum mismatch for install.sh (expected $checksum, got $actual)" >&2
+                echo "CLI not updated for safety." >&2
+            else
+                echo "$install_script" | bash -s -- --skip-docker --tag "$target_version"
+            fi
+        else
+            # No checksum available — HTTPS-only provides transport security
+            echo "$install_script" | bash -s -- --skip-docker --tag "$target_version"
+        fi
+    else
+        echo "Warning: could not fetch install.sh, CLI not updated"
+    fi
+
+    # Show what changed
+    echo ""
+    echo "Image updated to ${pull_image}."
+
+    # Find running oc containers
+    local containers
+    containers=$(docker ps --filter "ancestor=$IMAGE" --format "{{.ID}}\t{{.Names}}\t{{.Status}}" 2>/dev/null || true)
+
+    if [ -z "$containers" ]; then
+        echo "No running containers to restart."
+        return 0
+    fi
+
+    echo ""
+    echo "Running containers using this image:"
+    echo "$containers" | column -t -s $'\t' 2>/dev/null
+    echo ""
+
+    if [ "$do_restart" = false ]; then
+        echo "Run 'oc update --restart' to restart them with the new image."
+        return 0
+    fi
+
+    # Confirm restart
+    if [ "$auto_yes" = false ]; then
+        read -rp "Restart these containers with the new image? [y/N] " answer
+        case "$answer" in
+            y|Y) ;;
+            *)   echo "Aborted."; return 0 ;;
+        esac
+    fi
+
+    # Restart each container, preserving its config
+    while IFS=$'\t' read -r id name status; do
+        echo "Restarting $name ..."
+
+        # Capture original run config BEFORE stopping/removing
+        local image binds env_raw ports restart_policy workdir tty_setting entrypoint cmd_args
+        image=$(docker inspect "$id" --format '{{.Config.Image}}' 2>/dev/null)
+        binds=$(docker inspect "$id" --format '{{range .HostConfig.Binds}}{{.}}{{"\n"}}{{end}}' 2>/dev/null)
+        # Capture raw env (one per line) to preserve values with spaces
+        env_raw=$(docker inspect "$id" --format '{{range .Config.Env}}{{.}}{{"\n"}}{{end}}' 2>/dev/null)
+        ports=$(docker inspect "$id" --format '{{range $p, $conf := .HostConfig.PortBindings}}-p {{(index $conf 0).HostPort}}:{{$p}}{{"\n"}}{{end}}' 2>/dev/null)
+        restart_policy=$(docker inspect "$id" --format '{{.HostConfig.RestartPolicy.Name}}' 2>/dev/null)
+        workdir=$(docker inspect "$id" --format '{{.Config.WorkingDir}}' 2>/dev/null)
+        tty_setting=$(docker inspect "$id" --format '{{.Config.Tty}}' 2>/dev/null || echo "false")
+        # Capture original CMD and Entrypoint to preserve run mode (e.g. "remote")
+        cmd_args=$(docker inspect "$id" --format '{{range .Config.Cmd}}{{.}}{{"\n"}}{{end}}' 2>/dev/null)
+        entrypoint=$(docker inspect "$id" --format '{{range .Config.Entrypoint}}{{.}}{{"\n"}}{{end}}' 2>/dev/null)
+
+        # Stop and remove old container
+        docker stop "$id" >/dev/null 2>&1
+        docker rm "$id" >/dev/null 2>&1
+
+        # Re-run with same config but new image
+        local run_args=(--name "$name" --platform "${docker_platform:-linux/amd64}")
+        [ -n "$binds" ] && while IFS= read -r b; do [ -n "$b" ] && run_args+=(-v "$b"); done <<< "$binds"
+        # Pass env vars line-by-line to avoid word-splitting on values with spaces
+        if [ -n "$env_raw" ]; then
+            while IFS= read -r ev; do
+                [ -n "$ev" ] && run_args+=("--env" "$ev")
+            done <<< "$env_raw"
+        fi
+        if [ -n "$ports" ]; then
+            while IFS= read -r p; do [ -n "$p" ] && run_args+=($p); done <<< "$ports"
+        fi
+        [ "$restart_policy" != "" ] && [ "$restart_policy" != "no" ] && run_args+=(--restart "$restart_policy")
+        [ -n "$workdir" ] && run_args+=(-w "$workdir")
+
+        # Determine detached vs interactive based on original container's TTY setting
+        if [ "$tty_setting" = "true" ]; then
+            run_args+=(-it)
+        else
+            run_args+=(-d)
+        fi
+
+        # Preserve original entrypoint if it was overridden
+        # Docker --entrypoint only accepts a single executable, not args.
+        # Split: first element = entrypoint, rest = prepend to CMD.
+        local shift_ep_args=()
+        if [ -n "$entrypoint" ]; then
+            local ep_parts=()
+            while IFS= read -r ep; do [ -n "$ep" ] && ep_parts+=("$ep"); done <<< "$entrypoint"
+            if [ ${#ep_parts[@]} -gt 0 ]; then
+                run_args+=(--entrypoint "${ep_parts[0]}")
+                if [ ${#ep_parts[@]} -gt 1 ]; then
+                    shift_ep_args=("${ep_parts[@]:1}")
+                fi
+            fi
+        fi
+
+        run_args+=("$pull_image")
+
+        # Prepend any extra entrypoint args (e.g. "--" from "tini -- entrypoint.sh"),
+        # then append original CMD args (e.g. "remote") to preserve run mode
+        if [ ${#shift_ep_args[@]} -gt 0 ]; then
+            run_args+=("${shift_ep_args[@]}")
+        fi
+        if [ -n "$cmd_args" ]; then
+            while IFS= read -r ca; do [ -n "$ca" ] && run_args+=("$ca"); done <<< "$cmd_args"
+        fi
+        local restart_output
+        debug_cmd docker run "${run_args[@]}"
+        restart_output=$(docker run "${run_args[@]}" 2>&1) || { echo "Warning: failed to restart $name" >&2; echo "$restart_output" >&2; }
+        echo "  $name restarted with new image"
+    done <<< "$containers"
+
+    echo ""
+    echo "All containers restarted with $pull_image"
+}
+
+# ── Dispatch ──────────────────────────────────────────────────────
+case "$COMMAND" in
+    run)    cmd_run "$@" ;;
+    remote) cmd_remote "$@" ;;
+    ssh)    cmd_ssh "$@" ;;
+    shell)  cmd_shell "$@" ;;
+    stop)   cmd_stop "$@" ;;
+    update) cmd_update "$@" ;;
+    ls)     cmd_ls ;;
+    config) cmd_config "$@" ;;
+    help)   show_help "$@" ;;
+    *)      echo "Unknown command: $COMMAND" >&2; show_help ;;
+esac
