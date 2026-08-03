@@ -232,7 +232,7 @@ oc config validate          # 校验配置
 | 💻 Dev | @dev | 代码编写、Bug 修复 |
 | ⚙️ DevOps | @devops | CI/CD、一键部署 |
 | 🧪 QA | @qa | 测试用例、质量把关 |
-| 📢 Ops | @ops | 内容运营、增长实验 |
+| 📢 Ops | @growth | 内容运营、增长实验 |
 | 📊 Data | @data | 埋点设计、效果分析 |
 | 💰 Fin | @fin | 记账、现金流追踪 |
 
